@@ -84,12 +84,15 @@ def _read_targets(cmd: SimpleCommand) -> list[str]:
     prog = cmd.program
     if prog in READERS:
         reads += positional_args(cmd.args, frozenset({"-n", "-c", "-d", "-f", "-k", "-t"}))
-    elif prog in PATTERN_FIRST and "-i" not in cmd.args:
-        reads += positional_args(cmd.args, frozenset({"-e", "-f", "-m", "-A", "-B", "-C"}))[1:]
+    elif prog in PATTERN_FIRST:
+        args = positional_args(cmd.args, frozenset({"-e", "-f", "-m", "-A", "-B", "-C"}))
+        explicit = any(a in {"-e", "-f"} or a.startswith(("--regexp", "--file")) for a in cmd.args)
+        reads += args if explicit else args[1:]
     elif prog == "find":
         reads += find_roots(cmd)
     elif prog in {"cp", "mv", "rsync"}:
-        reads += positional_args(cmd.args, frozenset({"-t"}))[:-1]
+        sources = positional_args(cmd.args, frozenset({"-t"}))
+        reads += sources if "-t" in cmd.args else sources[:-1]
     elif prog in {"tar", "zip"}:
         written = write_targets(cmd)
         reads += [p for p in positional_args(cmd.args, frozenset({"-C"})) if p not in written]

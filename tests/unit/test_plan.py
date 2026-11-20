@@ -36,3 +36,9 @@ def test_plan_without_paths() -> None:
     plan = build_plan("echo hi", "/ws")
     assert plan.touches == []
     assert plan.steps[0].effects == ("compute",)
+
+
+def test_plan_reads_inputs_for_option_forms() -> None:
+    plan = build_plan("grep -i todo notes.txt\ngrep -e x log.txt\ncp -t out a.txt b.txt", "/ws")
+    reads = {t.path for t in plan.touches if t.action == "read"}
+    assert {"notes.txt", "log.txt", "a.txt", "b.txt"} <= reads
