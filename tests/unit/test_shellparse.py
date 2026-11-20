@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from termaai.safety.shellparse import parse, positional_args, short_flags, tokenize
+from termaai.safety.shellparse import (
+    parse,
+    positional_args,
+    short_flags,
+    strip_comment,
+    tokenize,
+)
 
 
 def programs(script: str) -> list[str]:
@@ -81,3 +87,10 @@ def test_single_quoted_command_substitution_is_not_a_command() -> None:
 def test_double_quoted_substitution_with_inner_quotes_is_a_command() -> None:
     assert "rm" in programs('echo "$(rm -rf "/etc")"')
     assert "rm" in programs("echo \"$(rm -rf '/etc')\"")
+
+
+def test_strip_comment_ignores_quoted_and_in_word_hashes() -> None:
+    assert strip_comment("echo hi # note") == "echo hi "
+    assert strip_comment("# whole line") == ""
+    assert strip_comment("echo ' #'; bash x") == "echo ' #'; bash x"
+    assert strip_comment('echo " #" a#b') == 'echo " #" a#b'
