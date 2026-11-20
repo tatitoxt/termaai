@@ -152,6 +152,27 @@ def _split_single_quoted(text: str) -> tuple[str, list[str]]:
     return "".join(out), quoted
 
 
+def strip_comment(line: str) -> str:
+    """Drop a trailing ``# comment`` from one line, ignoring ``#`` inside quotes or words."""
+    in_single = in_double = escaped = False
+    prev = " "
+    for i, ch in enumerate(line):
+        if in_single:
+            in_single = ch != "'"
+        elif escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == '"':
+            in_double = not in_double
+        elif ch == "'" and not in_double:
+            in_single = True
+        elif ch == "#" and not in_double and prev.isspace():
+            return line[:i]
+        prev = ch
+    return line
+
+
 def _norm(text: str) -> str:
     return " ".join(text.replace('"', "").replace("'", "").split())
 
