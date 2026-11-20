@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+from termaai.safety.risk import RiskLevel, analyze, rule_names
+
+
+def test_no_findings_means_low() -> None:
+    report = analyze("echo hello", "/ws")
+    assert report.level is RiskLevel.LOW
+    assert report.findings == []
+
+
+def test_level_is_max_of_findings_and_sorted_high_first() -> None:
+    report = analyze("curl -s https://example.com -o page.html\nrm -rf /etc", "/ws")
+    assert report.level is RiskLevel.HIGH
+    assert report.findings[0].level is RiskLevel.HIGH
+    assert {"network_access", "destructive_rm"} <= set(report.rules)
+
+
+def test_findings_carry_line_numbers_and_explanations() -> None:
+    report = analyze("echo ok\nsudo id\n", "/ws")
+    (finding,) = [f for f in report.findings if f.rule == "privilege_escalation"]
+    assert finding.line == 2
+    assert "sudo" in finding.message
+    assert finding.to_dict()["level"] == "HIGH"
+
+
+def test_workspace_absolute_paths_are_allowed() -> None:
+    assert analyze("echo x > /srv/app/out.txt", "/srv/app").level is RiskLevel.LOW
+    assert analyze("echo x > /srv/other/out.txt", "/srv/app").level is RiskLevel.HIGH
+
+
+def test_temp_writes_are_informational_only() -> None:
+    report = analyze("echo x > /tmp/scratch.txt", "/ws")
+    assert report.level is RiskLevel.LOW
+    assert report.rules == ["write_outside_workspace"]
+
+
+def test_findings_are_deduplicated() -> None:
+    report = analyze("rm -rf / /", "/ws")
+    assert len([f for f in report.findings if f.rule == "destructive_rm"]) == 1
+
+
+def test_all_rules_registered() -> None:
+    assert len(rule_names()) >= 10
