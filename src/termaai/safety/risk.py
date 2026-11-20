@@ -19,6 +19,7 @@ from termaai.safety.shellparse import (
     WRITE_REDIRECTS,
     ParsedScript,
     SimpleCommand,
+    blank_quoted,
     parse,
     positional_args,
     short_flags,
@@ -282,7 +283,12 @@ def remote_code_execution(parsed: ParsedScript, workspace: str) -> Iterable[Find
                 )
     for lineno, line in enumerate(parsed.source.splitlines(), start=1):
         code = strip_comment(line)
-        if _PROCESS_SUBST_DOWNLOAD.search(code) or _SHELL_C_DOWNLOAD.search(code):
+        unquoted = blank_quoted(code)
+        if any(
+            m.start() < len(unquoted) and unquoted[m.start()] != " "
+            for pattern in (_PROCESS_SUBST_DOWNLOAD, _SHELL_C_DOWNLOAD)
+            for m in pattern.finditer(code)
+        ):
             yield Finding(
                 "remote_code_execution",
                 RiskLevel.HIGH,
