@@ -84,9 +84,9 @@ class SimpleCommand:
         return self.argv[1:]
 
     def display(self) -> str:
-        parts = [*self.wrappers, *self.argv]
-        parts += [f"{r.op} {r.target}" for r in self.redirects]
-        return " ".join(shlex.quote(p) if p and not _looks_like_op(p) else p for p in parts)
+        words = [shlex.quote(p) for p in (*self.wrappers, *self.argv)]
+        words += [f"{r.op} {shlex.quote(r.target)}" for r in self.redirects]
+        return " ".join(words)
 
 
 @dataclass
@@ -100,10 +100,6 @@ class ParsedScript:
         for cmd in self.commands:
             groups.setdefault(cmd.pipeline, []).append(cmd)
         return [groups[k] for k in sorted(groups)]
-
-
-def _looks_like_op(token: str) -> bool:
-    return token in REDIRECT_OPS or token in SEPARATORS or token == PIPE
 
 
 def _split_punct(token: str) -> list[str]:
