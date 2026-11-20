@@ -20,6 +20,7 @@ from termaai.safety.shellparse import (
     WRITE_REDIRECTS,
     ParsedScript,
     SimpleCommand,
+    inline_script,
     parse,
     positional_args,
     short_flags,
@@ -267,7 +268,8 @@ def _runs_downloaded_code(cmd: SimpleCommand) -> bool:
     operands = positional_args(cmd.args, frozenset({"-o", "-O", "--rcfile", "--init-file"}))
     if process_subst and operands and posixpath.basename(operands[0]) in DOWNLOADERS:
         return True
-    return any(_DOWNLOAD_SUBST.match(arg) for arg in cmd.args)
+    script = inline_script(cmd.args)
+    return script is not None and _DOWNLOAD_SUBST.match(script) is not None
 
 
 @rule

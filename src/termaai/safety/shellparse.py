@@ -332,12 +332,12 @@ class _Builder:
         )
         self.parsed.commands.append(cmd)
         if cmd.program in SHELLS and depth <= 4:
-            inline = _inline_script(cmd.args)
+            inline = inline_script(cmd.args)
             if inline is not None:
                 self.add_line(lineno, inline, depth + 1)
 
 
-def _inline_script(args: tuple[str, ...]) -> str | None:
+def inline_script(args: tuple[str, ...]) -> str | None:
     for idx, arg in enumerate(args):
         if arg == "-c" or (arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]):
             return args[idx + 1] if idx + 1 < len(args) else None
