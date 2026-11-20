@@ -4,7 +4,6 @@ from termaai.safety.shellparse import (
     parse,
     positional_args,
     short_flags,
-    strip_comment,
     tokenize,
 )
 
@@ -89,13 +88,11 @@ def test_double_quoted_substitution_with_inner_quotes_is_a_command() -> None:
     assert "rm" in programs("echo \"$(rm -rf '/etc')\"")
 
 
-def test_strip_comment_ignores_quoted_and_in_word_hashes() -> None:
-    assert strip_comment("echo hi # note") == "echo hi "
-    assert strip_comment("# whole line") == ""
-    assert strip_comment("echo ' #'; bash x") == "echo ' #'; bash x"
-    assert strip_comment('echo " #" a#b') == 'echo " #" a#b'
-
-
 def test_single_quoted_substitution_with_inner_spaces_is_not_a_command() -> None:
     assert programs("echo '$( rm -rf / )'") == ["echo"]
     assert "rm" in programs("echo $( rm -rf / )")
+
+
+def test_substitution_with_nested_parentheses_is_parsed() -> None:
+    cmds = parse('echo "$(bash <(curl -s x))"').commands
+    assert [(c.program, c.args[:1]) for c in cmds] == [("bash", ("curl",)), ("echo", cmds[1].args)]

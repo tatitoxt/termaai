@@ -6,6 +6,7 @@ emits :class:`Finding` objects. The overall level is the highest finding level.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -19,11 +20,9 @@ from termaai.safety.shellparse import (
     WRITE_REDIRECTS,
     ParsedScript,
     SimpleCommand,
-    blank_quoted,
     parse,
     positional_args,
     short_flags,
-    strip_comment,
 )
 
 
@@ -84,8 +83,7 @@ _FORK_BOMB = re.compile(
     r"(?P<name>[A-Za-z_:.][A-Za-z0-9_:.]*)\s*\(\s*\)\s*\{[^}]*"
     r"(?P=name)\s*\|\s*(?P=name)\s*&[^}]*\}"
 )
-_PROCESS_SUBST_DOWNLOAD = re.compile(r"<\(\s*(curl|wget)\b")
-_SHELL_C_DOWNLOAD = re.compile(r"\b(ba|z|da|k)?sh\s+-c\s+[\"']?\$\(\s*(curl|wget)\b")
+_DOWNLOAD_SUBST = re.compile(r"\$\(\s*(curl|wget)\b")
 _CREDENTIAL_PATHS = re.compile(
     r"(/etc/shadow|/etc/gshadow|/etc/sudoers|\.ssh/id_[A-Za-z0-9_]+|\.ssh/authorized_keys"
     r"|\.aws/credentials|\.netrc|\.git-credentials|\.docker/config\.json|\.kube/config"
@@ -261,6 +259,16 @@ def write_outside_workspace(parsed: ParsedScript, workspace: str) -> Iterable[Fi
             yield _finding("write_outside_workspace", level, cmd, f"writes {target!r} ({why})")
 
 
+def _runs_downloaded_code(cmd: SimpleCommand) -> bool:
+    """``bash <(curl ...)``, ``source <(wget ...)`` or ``sh -c "$(curl ...)"``."""
+    if cmd.program not in INTERPRETERS and cmd.program not in {"source", "."}:
+        return False
+    process_subst = any(r.op == "<" and r.target == "(" for r in cmd.redirects)
+    if process_subst and cmd.args and posixpath.basename(cmd.args[0]) in DOWNLOADERS:
+        return True
+    return any(_DOWNLOAD_SUBST.match(arg) for arg in cmd.args)
+
+
 @rule
 def remote_code_execution(parsed: ParsedScript, workspace: str) -> Iterable[Finding]:
     for pipeline in parsed.pipelines():
@@ -281,22 +289,14 @@ def remote_code_execution(parsed: ParsedScript, workspace: str) -> Iterable[Find
                     right,
                     "decodes base64 and executes the result",
                 )
-    for lineno, line in enumerate(parsed.source.splitlines(), start=1):
-        code = strip_comment(line)
-        unquoted = blank_quoted(code)
-        if any(
-            m.start() < len(unquoted) and unquoted[m.start()] != " "
-            for pattern in (_PROCESS_SUBST_DOWNLOAD, _SHELL_C_DOWNLOAD)
-            for m in pattern.finditer(code)
-        ):
-            yield Finding(
+    for cmd in parsed.commands:
+        if _runs_downloaded_code(cmd):
+            yield _finding(
                 "remote_code_execution",
                 RiskLevel.HIGH,
-                lineno,
+                cmd,
                 "executes a script downloaded at run time",
-                line.strip(),
             )
-    for cmd in parsed.commands:
         if cmd.program == "eval":
             yield _finding("dynamic_eval", RiskLevel.MEDIUM, cmd, "eval executes dynamic code")
 

