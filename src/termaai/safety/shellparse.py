@@ -47,7 +47,6 @@ _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 _SUBST = re.compile(r"\$\(([^()]*)\)")
 _BACKTICK = re.compile(r"`([^`]*)`")
-_SINGLE_QUOTED = re.compile(r"'[^']*'")
 _WRAPPER_OPTS_WITH_ARG: dict[str, frozenset[str]] = {
     "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}),
     "doas": frozenset({"-u", "-C"}),
@@ -117,6 +116,30 @@ def _split_punct(token: str) -> list[str]:
             out.append(token[i])
             i += 1
     return out
+
+
+def _blank_single_quoted(text: str) -> str:
+    """Replace single-quoted text (where the shell would not expand anything) with blanks."""
+    out: list[str] = []
+    in_single = in_double = escaped = False
+    for ch in text:
+        if in_single:
+            if ch == "'":
+                in_single = False
+                out.append(ch)
+            else:
+                out.append(" ")
+            continue
+        out.append(ch)
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == '"':
+            in_double = not in_double
+        elif ch == "'" and not in_double:
+            in_single = True
+    return "".join(out)
 
 
 def tokenize(text: str) -> list[str]:
@@ -200,13 +223,14 @@ class _Builder:
         except ValueError as exc:
             self.parsed.warnings.append(f"line {lineno}: could not tokenize ({exc})")
             tokens = text.split()
-        self._consume(lineno, tokens, depth)
+        expandable = _blank_single_quoted(text)
+        self._consume(lineno, tokens, depth, expandable)
         if depth <= 4:
-            for match in _BACKTICK.finditer(_SINGLE_QUOTED.sub("''", text)):
+            for match in _BACKTICK.finditer(expandable):
                 if match.group(1).strip():
                     self.add_line(lineno, match.group(1), depth + 1)
 
-    def _consume(self, lineno: int, tokens: list[str], depth: int) -> None:
+    def _consume(self, lineno: int, tokens: list[str], depth: int, expandable: str) -> None:
         argv: list[str] = []
         redirects: list[Redirect] = []
         pipeline = self._next_pipeline()
@@ -222,7 +246,7 @@ class _Builder:
                     argv.pop()
                 if not (tok in {">&", "<&"} and (target.isdigit() or target == "-")):
                     redirects.append(Redirect(tok, target))
-                self._scan_substitutions(lineno, target, depth)
+                self._scan_substitutions(lineno, target, depth, expandable)
                 i += 2
                 continue
             if tok == PIPE or tok == "|&":
@@ -239,7 +263,7 @@ class _Builder:
             if not argv and tok in KEYWORDS:
                 i += 1
                 continue
-            self._scan_substitutions(lineno, tok, depth)
+            self._scan_substitutions(lineno, tok, depth, expandable)
             argv.append(tok)
             i += 1
         self._emit(lineno, argv, redirects, pipeline, depth)
@@ -248,11 +272,11 @@ class _Builder:
         self.pipeline_counter += 1
         return self.pipeline_counter
 
-    def _scan_substitutions(self, lineno: int, token: str, depth: int) -> None:
+    def _scan_substitutions(self, lineno: int, token: str, depth: int, expandable: str) -> None:
         if depth > 4:
             return
         for match in _SUBST.finditer(token):
-            if match.group(1).strip():
+            if match.group(0) in expandable and match.group(1).strip():
                 self.add_line(lineno, match.group(1), depth + 1)
 
     def _emit(

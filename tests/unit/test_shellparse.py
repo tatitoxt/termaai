@@ -70,3 +70,9 @@ def test_display_quotes_arguments() -> None:
 
 def test_single_quoted_backticks_are_not_commands() -> None:
     assert programs("echo 'use `rm -rf /` never'") == ["echo"]
+
+
+def test_single_quoted_command_substitution_is_not_a_command() -> None:
+    assert programs("printf '%s\\n' 'x $(rm -rf /)'") == ["printf"]
+    assert "rm" in programs('echo "$(rm -rf /)"')
+    assert "rm" in programs('echo "it\'s $(rm -rf /)"')
