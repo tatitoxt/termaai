@@ -283,9 +283,14 @@ def _runs_downloaded_code(cmd: SimpleCommand) -> bool:
 def _inline_code(cmd: SimpleCommand) -> str | None:
     """The code passed to a non-shell interpreter on its command line (``node -e CODE``)."""
     options = _INLINE_CODE_OPTS.get(posixpath.basename(cmd.program).rstrip("0123456789."), {"-c"})
-    for idx, arg in enumerate(cmd.args[:-1]):
+    for idx, arg in enumerate(cmd.args):
+        following = cmd.args[idx + 1] if idx + 1 < len(cmd.args) else None
         if arg in options:
-            return cmd.args[idx + 1]
+            return following
+        if arg.startswith("-") and not arg.startswith("--"):
+            for pos, letter in enumerate(arg[1:], start=2):
+                if f"-{letter}" in options:
+                    return arg[pos:] or following
     return None
 
 
