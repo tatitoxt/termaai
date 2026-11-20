@@ -57,3 +57,7 @@ def test_quoted_unknown_request_from_fake_provider_is_low_risk() -> None:
 
     script = FakeProvider().generate("say $(rm -rf /) please").script
     assert analyze(script, "/ws").level is RiskLevel.LOW
+
+
+def test_double_quoted_substitution_with_quoted_path_is_high() -> None:
+    assert analyze('echo "$(rm -rf "/etc")"\n', "/ws").level is RiskLevel.HIGH
