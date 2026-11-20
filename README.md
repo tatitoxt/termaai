@@ -1,2 +1,1 @@
-# termaai
-Terminal AI assistant that generates, validates, dry-runs and safely executes shell scripts.
+# TermaAI — terminal AI assistant that turns natural-language requests into Bash scripts and runs them safely.
