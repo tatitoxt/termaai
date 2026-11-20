@@ -221,6 +221,7 @@ class Assistant:
     ) -> int:
         workspace = options.workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
         workspace.mkdir(parents=True, exist_ok=True)
+        workspace = workspace.resolve()
         review = self.review(script, workspace)
         base = {"prompt": prompt, "source": source, "forced": options.force}
         self.show_script(script, "Generated script" if kind == "ask" else "Script")

@@ -128,6 +128,7 @@ class SubprocessExecutor:
         self.bash = bash or shutil.which("bash") or "/bin/bash"
 
     def run(self, script: str, workspace: Path, limits: Limits) -> ExecutionResult:
+        workspace = workspace.resolve()
         script_path = _write_script(script)
         env = {
             "PATH": "/usr/local/bin:/usr/bin:/bin",
