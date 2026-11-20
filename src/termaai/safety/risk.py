@@ -82,6 +82,7 @@ _FORK_BOMB = re.compile(
     r"(?P<name>[A-Za-z_:.][A-Za-z0-9_:.]*)\s*\(\s*\)\s*\{[^}]*"
     r"(?P=name)\s*\|\s*(?P=name)\s*&[^}]*\}"
 )
+_COMMENT = re.compile(r"(?:^|(?<=\s))#.*$")
 _PROCESS_SUBST_DOWNLOAD = re.compile(r"<\(\s*(curl|wget)\b")
 _SHELL_C_DOWNLOAD = re.compile(r"\b(ba|z|da|k)?sh\s+-c\s+[\"']?\$\(\s*(curl|wget)\b")
 _CREDENTIAL_PATHS = re.compile(
@@ -280,7 +281,8 @@ def remote_code_execution(parsed: ParsedScript, workspace: str) -> Iterable[Find
                     "decodes base64 and executes the result",
                 )
     for lineno, line in enumerate(parsed.source.splitlines(), start=1):
-        if _PROCESS_SUBST_DOWNLOAD.search(line) or _SHELL_C_DOWNLOAD.search(line):
+        code = _COMMENT.sub("", line)
+        if _PROCESS_SUBST_DOWNLOAD.search(code) or _SHELL_C_DOWNLOAD.search(code):
             yield Finding(
                 "remote_code_execution",
                 RiskLevel.HIGH,

