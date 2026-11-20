@@ -85,6 +85,14 @@ _FORK_BOMB = re.compile(
     r"(?P=name)\s*\|\s*(?P=name)\s*&[^}]*\}"
 )
 _DOWNLOAD_SUBST = re.compile(r"\$\(\s*(curl|wget)\b")
+_INLINE_CODE_OPTS: dict[str, set[str]] = {
+    "python": {"-c"},
+    "node": {"-e", "--eval", "-p", "--print"},
+    "perl": {"-e", "-E"},
+    "ruby": {"-e"},
+    "lua": {"-e"},
+    "php": {"-r"},
+}
 _CREDENTIAL_PATHS = re.compile(
     r"(/etc/shadow|/etc/gshadow|/etc/sudoers|\.ssh/id_[A-Za-z0-9_]+|\.ssh/authorized_keys"
     r"|\.aws/credentials|\.netrc|\.git-credentials|\.docker/config\.json|\.kube/config"
@@ -268,8 +276,17 @@ def _runs_downloaded_code(cmd: SimpleCommand) -> bool:
     operands = positional_args(cmd.args, frozenset({"-o", "-O", "--rcfile", "--init-file"}))
     if process_subst and operands and posixpath.basename(operands[0]) in DOWNLOADERS:
         return True
-    script = inline_script(cmd.args)
+    script = inline_script(cmd.args) if cmd.program in SHELLS else _inline_code(cmd)
     return script is not None and _DOWNLOAD_SUBST.match(script) is not None
+
+
+def _inline_code(cmd: SimpleCommand) -> str | None:
+    """The code passed to a non-shell interpreter on its command line (``node -e CODE``)."""
+    options = _INLINE_CODE_OPTS.get(posixpath.basename(cmd.program).rstrip("0123456789."), {"-c"})
+    for idx, arg in enumerate(cmd.args[:-1]):
+        if arg in options:
+            return cmd.args[idx + 1]
+    return None
 
 
 @rule
