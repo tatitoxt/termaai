@@ -76,3 +76,8 @@ def test_single_quoted_command_substitution_is_not_a_command() -> None:
     assert programs("printf '%s\\n' 'x $(rm -rf /)'") == ["printf"]
     assert "rm" in programs('echo "$(rm -rf /)"')
     assert "rm" in programs('echo "it\'s $(rm -rf /)"')
+
+
+def test_double_quoted_substitution_with_inner_quotes_is_a_command() -> None:
+    assert "rm" in programs('echo "$(rm -rf "/etc")"')
+    assert "rm" in programs("echo \"$(rm -rf '/etc')\"")

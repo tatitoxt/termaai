@@ -118,16 +118,24 @@ def _split_punct(token: str) -> list[str]:
     return out
 
 
-def _blank_single_quoted(text: str) -> str:
-    """Replace single-quoted text (where the shell would not expand anything) with blanks."""
+def _split_single_quoted(text: str) -> tuple[str, list[str]]:
+    """Return ``text`` with single-quoted contents blanked, plus those contents.
+
+    The shell expands nothing inside single quotes, so the blanked text is what may expand.
+    """
     out: list[str] = []
+    quoted: list[str] = []
+    current: list[str] = []
     in_single = in_double = escaped = False
     for ch in text:
         if in_single:
             if ch == "'":
                 in_single = False
+                quoted.append("".join(current))
+                current = []
                 out.append(ch)
             else:
+                current.append(ch)
                 out.append(" ")
             continue
         out.append(ch)
@@ -139,7 +147,13 @@ def _blank_single_quoted(text: str) -> str:
             in_double = not in_double
         elif ch == "'" and not in_double:
             in_single = True
-    return "".join(out)
+    if current:
+        quoted.append("".join(current))
+    return "".join(out), quoted
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.replace('"', "").replace("'", "").split())
 
 
 def tokenize(text: str) -> list[str]:
@@ -212,6 +226,19 @@ def _unwrap(argv: list[str]) -> tuple[list[str], list[str]]:
     return wrappers, argv
 
 
+def _only_single_quoted(inner: str, source: str) -> bool:
+    """True when ``$(inner)`` occurs in ``source`` only inside single quotes (so never runs).
+
+    Tokens have lost their quotes, so both sides are compared with quotes removed; anything
+    not provably single-quoted is treated as a real substitution (fail-safe).
+    """
+    wanted = _norm(inner)
+    expandable, quoted = _split_single_quoted(source)
+    if any(_norm(m.group(1)) == wanted for m in _SUBST.finditer(expandable)):
+        return False
+    return any(f"$({wanted})" in _norm(q) for q in quoted)
+
+
 class _Builder:
     def __init__(self, parsed: ParsedScript) -> None:
         self.parsed = parsed
@@ -223,14 +250,14 @@ class _Builder:
         except ValueError as exc:
             self.parsed.warnings.append(f"line {lineno}: could not tokenize ({exc})")
             tokens = text.split()
-        expandable = _blank_single_quoted(text)
-        self._consume(lineno, tokens, depth, expandable)
+        expandable, _ = _split_single_quoted(text)
+        self._consume(lineno, tokens, depth, text)
         if depth <= 4:
             for match in _BACKTICK.finditer(expandable):
                 if match.group(1).strip():
                     self.add_line(lineno, match.group(1), depth + 1)
 
-    def _consume(self, lineno: int, tokens: list[str], depth: int, expandable: str) -> None:
+    def _consume(self, lineno: int, tokens: list[str], depth: int, source: str) -> None:
         argv: list[str] = []
         redirects: list[Redirect] = []
         pipeline = self._next_pipeline()
@@ -246,7 +273,7 @@ class _Builder:
                     argv.pop()
                 if not (tok in {">&", "<&"} and (target.isdigit() or target == "-")):
                     redirects.append(Redirect(tok, target))
-                self._scan_substitutions(lineno, target, depth, expandable)
+                self._scan_substitutions(lineno, target, depth, source)
                 i += 2
                 continue
             if tok == PIPE or tok == "|&":
@@ -263,7 +290,7 @@ class _Builder:
             if not argv and tok in KEYWORDS:
                 i += 1
                 continue
-            self._scan_substitutions(lineno, tok, depth, expandable)
+            self._scan_substitutions(lineno, tok, depth, source)
             argv.append(tok)
             i += 1
         self._emit(lineno, argv, redirects, pipeline, depth)
@@ -272,11 +299,11 @@ class _Builder:
         self.pipeline_counter += 1
         return self.pipeline_counter
 
-    def _scan_substitutions(self, lineno: int, token: str, depth: int, expandable: str) -> None:
+    def _scan_substitutions(self, lineno: int, token: str, depth: int, source: str) -> None:
         if depth > 4:
             return
         for match in _SUBST.finditer(token):
-            if match.group(0) in expandable and match.group(1).strip():
+            if match.group(1).strip() and not _only_single_quoted(match.group(1), source):
                 self.add_line(lineno, match.group(1), depth + 1)
 
     def _emit(
