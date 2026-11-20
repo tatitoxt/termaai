@@ -157,6 +157,7 @@ class SubprocessExecutor:
                 [self.bash, "--noprofile", "--norc", str(script_path)],
                 limits.timeout,
                 on_timeout=kill_group,
+                after_exit=kill_group,
                 cwd=workspace,
                 env=env,
                 start_new_session=True,

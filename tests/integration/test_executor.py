@@ -160,3 +160,11 @@ def test_output_capture_is_bounded_in_memory(executor: Executor, tmp_path: Path)
     assert result.exit_code == 0
     assert "output truncated" in result.stdout
     assert peak < 5_000_000
+
+
+def test_background_jobs_do_not_outlive_the_script(tmp_path: Path) -> None:
+    script = "(sleep 2; echo late > late.txt) >/dev/null 2>&1 &\necho started\n"
+    result = SubprocessExecutor().run(script, tmp_path, Limits(timeout=20))
+    assert result.stdout.strip() == "started"
+    time.sleep(3)
+    assert not (tmp_path / "late.txt").exists()
