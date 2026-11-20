@@ -134,7 +134,6 @@ def test_missing_image_raises(tmp_path: Path, docker_ready: None) -> None:
         DockerExecutor(image="termaai-test/does-not-exist:never").ensure_image()
 
 
-
 def test_script_file_is_private_to_the_user(executor: Executor, tmp_path: Path) -> None:
     result = executor.run('stat -c %a "$0"\n', tmp_path, Limits(timeout=20))
     assert result.exit_code == 0
@@ -168,3 +167,14 @@ def test_background_jobs_do_not_outlive_the_script(tmp_path: Path) -> None:
     assert result.stdout.strip() == "started"
     time.sleep(3)
     assert not (tmp_path / "late.txt").exists()
+
+
+def test_relative_workspace_gives_absolute_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ws").mkdir()
+    result = SubprocessExecutor().run('echo "$HOME"\ntouch ~/x\n', Path("ws"), Limits(timeout=20))
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(tmp_path / "ws")
+    assert (tmp_path / "ws" / "x").exists()
