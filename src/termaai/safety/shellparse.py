@@ -45,7 +45,7 @@ WRAPPERS = frozenset(
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "busybox"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-_SUBST = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)")
+_SUBST = re.compile(r"\$\((?!\()((?:[^()]|\([^()]*\))*)\)")
 _BACKTICK = re.compile(r"`([^`]*)`")
 _WRAPPER_OPTS_WITH_ARG: dict[str, frozenset[str]] = {
     "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}),
