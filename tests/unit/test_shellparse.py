@@ -96,3 +96,8 @@ def test_single_quoted_substitution_with_inner_spaces_is_not_a_command() -> None
 def test_substitution_with_nested_parentheses_is_parsed() -> None:
     cmds = parse('echo "$(bash <(curl -s x))"').commands
     assert [(c.program, c.args[:1]) for c in cmds] == [("bash", ("curl",)), ("echo", cmds[1].args)]
+
+
+def test_arithmetic_expansion_is_not_a_command_substitution() -> None:
+    assert programs('echo "$((reboot + 1))"') == ["echo"]
+    assert "rm" in programs("echo $(( $(rm -rf /) + 1 ))")
