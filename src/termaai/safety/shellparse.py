@@ -45,7 +45,9 @@ WRAPPERS = frozenset(
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "busybox"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-_SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+_SUBST = re.compile(r"\$\(([^()]*)\)")
+_BACKTICK = re.compile(r"`([^`]*)`")
+_SINGLE_QUOTED = re.compile(r"'[^']*'")
 _WRAPPER_OPTS_WITH_ARG: dict[str, frozenset[str]] = {
     "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"}),
     "doas": frozenset({"-u", "-C"}),
@@ -199,6 +201,10 @@ class _Builder:
             self.parsed.warnings.append(f"line {lineno}: could not tokenize ({exc})")
             tokens = text.split()
         self._consume(lineno, tokens, depth)
+        if depth <= 4:
+            for match in _BACKTICK.finditer(_SINGLE_QUOTED.sub("''", text)):
+                if match.group(1).strip():
+                    self.add_line(lineno, match.group(1), depth + 1)
 
     def _consume(self, lineno: int, tokens: list[str], depth: int) -> None:
         argv: list[str] = []
@@ -246,9 +252,8 @@ class _Builder:
         if depth > 4:
             return
         for match in _SUBST.finditer(token):
-            inner = match.group(1) if match.group(1) is not None else match.group(2)
-            if inner and inner.strip():
-                self.add_line(lineno, inner, depth + 1)
+            if match.group(1).strip():
+                self.add_line(lineno, match.group(1), depth + 1)
 
     def _emit(
         self,
