@@ -177,8 +177,8 @@ it: confirm, deny, empty answer (defaults to no), HIGH-risk block, `--force` wit
 and with the correct second confirmation, timeout, dry-run, a REPL session, `explain`
 and `history`. Several of these run in both the Docker and the subprocess sandbox.
 
-Measured in this repository at the time of writing (`pytest -q`): **211 tests**
-(158 unit, 40 integration, 13 E2E) passing locally with Docker
+Measured in this repository at the time of writing (`pytest -q`): **213 tests**
+(160 unit, 40 integration, 13 E2E) passing locally with Docker
 and ShellCheck available; CI runs the same suites on Python 3.10 and 3.12.
 
 ### Dependency audit
