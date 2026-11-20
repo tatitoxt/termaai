@@ -94,3 +94,8 @@ def test_strip_comment_ignores_quoted_and_in_word_hashes() -> None:
     assert strip_comment("# whole line") == ""
     assert strip_comment("echo ' #'; bash x") == "echo ' #'; bash x"
     assert strip_comment('echo " #" a#b') == 'echo " #" a#b'
+
+
+def test_single_quoted_substitution_with_inner_spaces_is_not_a_command() -> None:
+    assert programs("echo '$( rm -rf / )'") == ["echo"]
+    assert "rm" in programs("echo $( rm -rf / )")

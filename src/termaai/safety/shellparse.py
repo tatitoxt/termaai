@@ -257,7 +257,7 @@ def _only_single_quoted(inner: str, source: str) -> bool:
     expandable, quoted = _split_single_quoted(source)
     if any(_norm(m.group(1)) == wanted for m in _SUBST.finditer(expandable)):
         return False
-    return any(f"$({wanted})" in _norm(q) for q in quoted)
+    return any(_norm(m.group(1)) == wanted for q in quoted for m in _SUBST.finditer(q))
 
 
 class _Builder:
