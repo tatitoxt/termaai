@@ -62,8 +62,8 @@ _CANNED: list[tuple[re.Pattern[str], str, str]] = [
     ),
     (
         re.compile(r"\bfail\b"),
-        "echo 'about to fail' >&2\nexit 3\n",
-        "Exit with status 3 (used to demonstrate exit-code auditing).",
+        "echo 'about to fail' >&2\nexit 7\n",
+        "Exit with status 7 (used to demonstrate exit-code auditing).",
     ),
     (
         re.compile(r"\bbroken\b|\bsyntax error\b"),
