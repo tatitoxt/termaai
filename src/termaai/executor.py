@@ -66,8 +66,8 @@ def _write_script(script: str) -> Path:
     directory = Path(tempfile.mkdtemp(prefix="termaai-script-"))
     path = directory / "script.sh"
     path.write_text(script, encoding="utf-8")
-    path.chmod(0o644)
-    directory.chmod(0o755)
+    path.chmod(0o600)
+    directory.chmod(0o700)
     return path
 
 
