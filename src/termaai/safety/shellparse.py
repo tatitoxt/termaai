@@ -173,6 +173,31 @@ def strip_comment(line: str) -> str:
     return line
 
 
+def blank_quoted(text: str) -> str:
+    """Return ``text`` with the contents of single- and double-quoted strings blanked."""
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for ch in text:
+        if escaped:
+            escaped = False
+            out.append(" " if quote else ch)
+        elif ch == "\\" and quote != "'":
+            escaped = True
+            out.append(" " if quote else ch)
+        elif quote:
+            if ch == quote:
+                quote = ""
+                out.append(ch)
+            else:
+                out.append(" ")
+        else:
+            if ch in "'\"":
+                quote = ch
+            out.append(ch)
+    return "".join(out)
+
+
 def _norm(text: str) -> str:
     return " ".join(text.replace('"', "").replace("'", "").split())
 
