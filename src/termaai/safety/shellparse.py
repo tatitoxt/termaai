@@ -296,7 +296,9 @@ def parse(source: str) -> ParsedScript:
     return parsed
 
 
-def positional_args(args: tuple[str, ...], options_with_arg: frozenset[str] = frozenset()) -> list[str]:
+def positional_args(
+    args: tuple[str, ...], options_with_arg: frozenset[str] = frozenset()
+) -> list[str]:
     """Return non-option arguments, honouring ``--`` and options that take a value."""
     out: list[str] = []
     skip = False

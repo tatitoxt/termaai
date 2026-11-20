@@ -10,6 +10,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
+from itertools import pairwise
 
 from termaai.safety import paths
 from termaai.safety.paths import Scope
@@ -261,7 +262,7 @@ def write_outside_workspace(parsed: ParsedScript, workspace: str) -> Iterable[Fi
 @rule
 def remote_code_execution(parsed: ParsedScript, workspace: str) -> Iterable[Finding]:
     for pipeline in parsed.pipelines():
-        for left, right in zip(pipeline, pipeline[1:]):
+        for left, right in pairwise(pipeline):
             if left.program in DOWNLOADERS and (
                 right.program in INTERPRETERS or "sudo" in right.wrappers
             ):
@@ -408,7 +409,7 @@ def network_exfiltration(parsed: ParsedScript, workspace: str) -> Iterable[Findi
                     f"copies local files to remote host ({pos[-1]})",
                 )
     for pipeline in parsed.pipelines():
-        for left, right in zip(pipeline, pipeline[1:]):
+        for left, right in pairwise(pipeline):
             if left.program in DATA_SOURCES and right.program in NETWORK_TOOLS - {"ping"}:
                 yield _finding(
                     "network_exfiltration",
@@ -444,29 +445,36 @@ def system_state(parsed: ParsedScript, workspace: str) -> Iterable[Finding]:
         if prog in {"shutdown", "reboot", "halt", "poweroff"} or (
             prog in {"init", "telinit"} and args[:1] in (("0",), ("6",))
         ):
-            yield _finding("system_state", RiskLevel.HIGH, cmd, f"{prog} stops or restarts the host")
+            yield _finding(
+                "system_state", RiskLevel.HIGH, cmd, f"{prog} stops or restarts the host"
+            )
         elif prog == "kill" and "-1" in positional_args(args) + list(args[-1:]):
             yield _finding("system_state", RiskLevel.HIGH, cmd, "kill -1 signals every process")
         elif prog in {"killall", "pkill"}:
             yield _finding("system_state", RiskLevel.MEDIUM, cmd, f"{prog} kills processes by name")
-        elif prog == "systemctl" and args[:1] and args[0] in {
-            "stop",
-            "disable",
-            "mask",
-            "poweroff",
-            "reboot",
-            "halt",
-            "kill",
-            "enable",
-        }:
-            level = RiskLevel.HIGH if args[0] in {"poweroff", "reboot", "halt"} else RiskLevel.MEDIUM
+        elif (
+            prog == "systemctl"
+            and args[:1]
+            and args[0]
+            in {
+                "stop",
+                "disable",
+                "mask",
+                "poweroff",
+                "reboot",
+                "halt",
+                "kill",
+                "enable",
+            }
+        ):
+            level = (
+                RiskLevel.HIGH if args[0] in {"poweroff", "reboot", "halt"} else RiskLevel.MEDIUM
+            )
             yield _finding("system_state", level, cmd, f"systemctl {args[0]} changes services")
         elif prog == "crontab":
             level = RiskLevel.HIGH if "-r" in args else RiskLevel.MEDIUM
             yield _finding("persistence", level, cmd, "modifies the user's crontab")
-        elif (prog == "history" and "-c" in args) or (
-            prog == "unset" and "HISTFILE" in args
-        ):
+        elif (prog == "history" and "-c" in args) or (prog == "unset" and "HISTFILE" in args):
             yield _finding("history_tampering", RiskLevel.MEDIUM, cmd, "clears shell history")
 
 

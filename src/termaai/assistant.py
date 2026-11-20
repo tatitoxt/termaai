@@ -134,7 +134,9 @@ class Assistant:
         if review.syntax.ok:
             self.console.print("[green]bash -n:[/] syntax OK")
         else:
-            self.console.print(f"[bold red]bash -n: syntax error[/]\n{escape(review.syntax.message)}")
+            self.console.print(
+                f"[bold red]bash -n: syntax error[/]\n{escape(review.syntax.message)}"
+            )
         sc = review.shellcheck
         if not sc.available:
             self.console.print("[dim]ShellCheck: not installed, skipped[/]")
@@ -147,7 +149,9 @@ class Assistant:
             for col in ("line", "level", "code", "message"):
                 table.add_column(col)
             for issue in sc.issues:
-                table.add_row(str(issue.line), issue.level, f"SC{issue.code}", escape(issue.message))
+                table.add_row(
+                    str(issue.line), issue.level, f"SC{issue.code}", escape(issue.message)
+                )
             self.console.print(table)
 
     def show_risk(self, report: RiskReport) -> None:
@@ -284,7 +288,9 @@ class Assistant:
             except SandboxError as exc:
                 if mode == "docker":
                     raise
-                self.console.print(f"[yellow]{escape(str(exc))}; falling back to the subprocess sandbox[/]")
+                self.console.print(
+                    f"[yellow]{escape(str(exc))}; falling back to the subprocess sandbox[/]"
+                )
                 return SubprocessExecutor()
         if isinstance(executor, SubprocessExecutor):
             self.console.print(
@@ -306,6 +312,8 @@ class Assistant:
             self.console.print(f"[bold red]Provider error:[/] {escape(str(exc))}")
             explanation = ""
         if explanation:
-            self.console.print(Panel(Text(explanation), title=f"Explanation ({self.provider.name})"))
+            self.console.print(
+                Panel(Text(explanation), title=f"Explanation ({self.provider.name})")
+            )
         self._record(review, "explain", "explained", source=source)
         return EXIT_OK

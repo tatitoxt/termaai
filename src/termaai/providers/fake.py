@@ -36,8 +36,7 @@ _CANNED: list[tuple[re.Pattern[str], str, str]] = [
     ),
     (
         re.compile(r"\b(backup|archive)\b"),
-        "mkdir -p backup\ntar -czf backup/workspace.tar.gz --exclude=./backup .\n"
-        "ls -l backup\n",
+        "mkdir -p backup\ntar -czf backup/workspace.tar.gz --exclude=./backup .\n" "ls -l backup\n",
         "Archive the workspace into backup/workspace.tar.gz.",
     ),
     (
