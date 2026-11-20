@@ -25,7 +25,15 @@ SYSTEM_PREFIXES = (
 )
 TEMP_PREFIXES = ("/tmp", "/var/tmp", "/dev/shm")
 SAFE_DEVICES = frozenset(
-    {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin", "/dev/tty", "/dev/zero", "/dev/random"}
+    {
+        "/dev/null",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/stdin",
+        "/dev/tty",
+        "/dev/zero",
+        "/dev/random",
+    }
 )
 SENSITIVE_HOME = (
     ".ssh",

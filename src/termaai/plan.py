@@ -98,7 +98,9 @@ def _read_targets(cmd: SimpleCommand) -> list[str]:
     return [r for r in reads if r and r != "-"]
 
 
-def _effects(cmd: SimpleCommand, writes: list[str], deletes: list[str], reads: list[str]) -> list[str]:
+def _effects(
+    cmd: SimpleCommand, writes: list[str], deletes: list[str], reads: list[str]
+) -> list[str]:
     effects: list[str] = []
     if {"sudo", "doas"} & set(cmd.wrappers) or cmd.program in {"sudo", "su", "doas"}:
         effects.append("privileged")

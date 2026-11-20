@@ -33,7 +33,9 @@ def get_provider(name: str | None = None, env: Mapping[str, str] | None = None) 
     if choice == "fake":
         return FakeProvider()
     if choice not in _DEFAULTS:
-        raise ProviderError(f"unknown provider {choice!r}; choose one of {', '.join(PROVIDER_NAMES)}")
+        raise ProviderError(
+            f"unknown provider {choice!r}; choose one of {', '.join(PROVIDER_NAMES)}"
+        )
     key_var, base_url, model = _DEFAULTS[choice]
     api_key = env.get(key_var, "")
     if not api_key:
