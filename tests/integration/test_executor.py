@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -130,3 +132,10 @@ def test_select_executor_modes(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_missing_image_raises(tmp_path: Path, docker_ready: None) -> None:
     with pytest.raises(SandboxError, match="cannot pull"):
         DockerExecutor(image="termaai-test/does-not-exist:never").ensure_image()
+
+
+
+def test_script_file_is_private_to_the_user(executor: Executor, tmp_path: Path) -> None:
+    result = executor.run('stat -c %a "$0"\n', tmp_path, Limits(timeout=20))
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "600"
