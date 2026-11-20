@@ -139,3 +139,24 @@ def test_script_file_is_private_to_the_user(executor: Executor, tmp_path: Path) 
     result = executor.run('stat -c %a "$0"\n', tmp_path, Limits(timeout=20))
     assert result.exit_code == 0
     assert result.stdout.strip() == "600"
+
+
+def test_non_utf8_output_is_replaced_not_fatal(executor: Executor, tmp_path: Path) -> None:
+    result = executor.run(
+        "printf 'ok\\377\\376'\nprintf '\\377' >&2\n", tmp_path, Limits(timeout=20)
+    )
+    assert result.exit_code == 0
+    assert result.stdout.startswith("ok")
+    assert "\ufffd" in result.stdout and "\ufffd" in result.stderr
+
+
+def test_output_capture_is_bounded_in_memory(executor: Executor, tmp_path: Path) -> None:
+    tracemalloc.start()
+    try:
+        result = executor.run("head -c 30000000 /dev/zero\n", tmp_path, Limits(timeout=30))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result.exit_code == 0
+    assert "output truncated" in result.stdout
+    assert peak < 5_000_000
