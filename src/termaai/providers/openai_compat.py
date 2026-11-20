@@ -67,9 +67,12 @@ class OpenAICompatibleProvider:
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise ProviderError(f"{self.name}: request failed ({exc})") from exc
         try:
-            return str(body["choices"][0]["message"]["content"])
+            content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ProviderError(f"{self.name}: unexpected response shape") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderError(f"{self.name}: empty response (the model may have refused)")
+        return content
 
     def generate(self, request: str) -> Generation:
         reply = self._chat(GENERATE_PROMPT, request)
