@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from termaai.providers import (
@@ -73,3 +75,18 @@ def test_get_provider_reads_env_configuration() -> None:
     groq = get_provider("groq", env={"GROQ_API_KEY": "k"})
     assert isinstance(groq, OpenAICompatibleProvider)
     assert groq.base_url == "https://api.groq.com/openai/v1"
+
+
+def test_null_content_is_a_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Response(io.BytesIO):
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.close()
+
+    body = b'{"choices": [{"message": {"content": null, "refusal": "no"}}]}'
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response(body))
+    provider = OpenAICompatibleProvider("openai", "test-key", "m", "http://127.0.0.1:9/v1")
+    with pytest.raises(ProviderError, match="empty response"):
+        provider.generate("list files")
