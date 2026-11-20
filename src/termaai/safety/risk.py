@@ -264,7 +264,8 @@ def _runs_downloaded_code(cmd: SimpleCommand) -> bool:
     if cmd.program not in INTERPRETERS and cmd.program not in {"source", "."}:
         return False
     process_subst = any(r.op == "<" and r.target == "(" for r in cmd.redirects)
-    if process_subst and cmd.args and posixpath.basename(cmd.args[0]) in DOWNLOADERS:
+    operands = positional_args(cmd.args, frozenset({"-o", "-O", "--rcfile", "--init-file"}))
+    if process_subst and operands and posixpath.basename(operands[0]) in DOWNLOADERS:
         return True
     return any(_DOWNLOAD_SUBST.match(arg) for arg in cmd.args)
 
