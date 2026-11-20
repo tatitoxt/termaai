@@ -10,17 +10,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import resource
 import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Any, Protocol
 
 DEFAULT_IMAGE = "bash:5.2"
 TIMEOUT_EXIT_CODE = 124
@@ -56,10 +59,57 @@ class SandboxError(RuntimeError):
     pass
 
 
-def _truncate(text: str) -> str:
-    if len(text) <= OUTPUT_LIMIT:
-        return text
-    return text[:OUTPUT_LIMIT] + f"\n[termaai: output truncated at {OUTPUT_LIMIT} bytes]\n"
+def _pump(stream: IO[bytes], sink: bytearray) -> None:
+    """Drain ``stream`` completely but keep at most OUTPUT_LIMIT + 1 bytes in memory."""
+    while chunk := stream.read(65536):
+        room = OUTPUT_LIMIT + 1 - len(sink)
+        if room > 0:
+            sink.extend(chunk[:room])
+    stream.close()
+
+
+def _text(data: bytes | bytearray) -> str:
+    text = bytes(data[:OUTPUT_LIMIT]).decode("utf-8", errors="replace")
+    if len(data) > OUTPUT_LIMIT:
+        text += f"\n[termaai: output truncated at {OUTPUT_LIMIT} bytes]\n"
+    return text
+
+
+def _run_capped(
+    argv: list[str],
+    timeout: float,
+    on_timeout: Callable[[subprocess.Popen[bytes]], None],
+    after_exit: Callable[[subprocess.Popen[bytes]], None] | None = None,
+    **popen_kwargs: Any,
+) -> tuple[int, str, str, bool]:
+    """Run ``argv`` with bounded output capture; returns (exit code, stdout, stderr, timed out)."""
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **popen_kwargs,
+    )
+    assert proc.stdout is not None and proc.stderr is not None
+    out, err = bytearray(), bytearray()
+    pumps = [
+        threading.Thread(target=_pump, args=(proc.stdout, out), daemon=True),
+        threading.Thread(target=_pump, args=(proc.stderr, err), daemon=True),
+    ]
+    for t in pumps:
+        t.start()
+    timed_out = False
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        on_timeout(proc)
+        code = proc.wait()
+    if after_exit is not None:
+        after_exit(proc)
+    for t in pumps:
+        t.join(timeout=5)
+    return (TIMEOUT_EXIT_CODE if timed_out else code), _text(out), _text(err), timed_out
 
 
 def _write_script(script: str) -> Path:
@@ -96,32 +146,29 @@ class SubprocessExecutor:
             resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
+        def kill_group(proc: subprocess.Popen[bytes]) -> None:
+            # Also reaps background jobs the script left behind.
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(proc.pid, signal.SIGKILL)
+
         start = time.monotonic()
-        proc = subprocess.Popen(
-            [self.bash, "--noprofile", "--norc", str(script_path)],
-            cwd=workspace,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-            preexec_fn=apply_limits,
-        )
-        timed_out = False
         try:
-            stdout, stderr = proc.communicate(timeout=limits.timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
-            stdout, stderr = proc.communicate()
+            code, stdout, stderr, timed_out = _run_capped(
+                [self.bash, "--noprofile", "--norc", str(script_path)],
+                limits.timeout,
+                on_timeout=kill_group,
+                cwd=workspace,
+                env=env,
+                start_new_session=True,
+                preexec_fn=apply_limits,
+            )
         finally:
             shutil.rmtree(script_path.parent, ignore_errors=True)
         return ExecutionResult(
             sandbox=self.name,
-            exit_code=TIMEOUT_EXIT_CODE if timed_out else proc.returncode,
-            stdout=_truncate(stdout),
-            stderr=_truncate(stderr),
+            exit_code=code,
+            stdout=stdout,
+            stderr=stderr,
             duration_s=round(time.monotonic() - start, 3),
             timed_out=timed_out,
         )
@@ -195,39 +242,28 @@ class DockerExecutor:
         self.ensure_image()
         script_path = _write_script(script)
         name = f"termaai-{uuid.uuid4().hex[:12]}"
-        start = time.monotonic()
-        timed_out = False
-        try:
-            proc = subprocess.run(
-                self.command(workspace, script_path, limits, name),
-                capture_output=True,
-                text=True,
-                timeout=limits.timeout,
-                check=False,
-            )
-            stdout, stderr, code = proc.stdout, proc.stderr, proc.returncode
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
+
+        def remove_container(proc: subprocess.Popen[bytes]) -> None:
             subprocess.run([self.docker, "rm", "-f", name], capture_output=True, check=False)
-            stdout = _decode(exc.stdout)
-            stderr = _decode(exc.stderr)
-            code = TIMEOUT_EXIT_CODE
+            proc.kill()
+
+        start = time.monotonic()
+        try:
+            code, stdout, stderr, timed_out = _run_capped(
+                self.command(workspace, script_path, limits, name),
+                limits.timeout,
+                on_timeout=remove_container,
+            )
         finally:
             shutil.rmtree(script_path.parent, ignore_errors=True)
         return ExecutionResult(
             sandbox=self.name,
             exit_code=code,
-            stdout=_truncate(stdout),
-            stderr=_truncate(stderr),
+            stdout=stdout,
+            stderr=stderr,
             duration_s=round(time.monotonic() - start, 3),
             timed_out=timed_out,
         )
-
-
-def _decode(data: bytes | str | None) -> str:
-    if data is None:
-        return ""
-    return data if isinstance(data, str) else data.decode(errors="replace")
 
 
 def docker_available(docker: str = "docker") -> bool:
