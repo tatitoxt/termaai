@@ -11,7 +11,7 @@ from __future__ import annotations
 import posixpath
 import re
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 SEPARATORS = frozenset({";", "&&", "||", "&", ";;", ";&", ";;&", "(", ")", "{", "}", "|&"})
 PIPE = "|"
@@ -76,6 +76,8 @@ class SimpleCommand:
     pipeline: int = 0
     wrappers: tuple[str, ...] = ()
     assignments: tuple[str, ...] = ()
+    paren_depth: int = 0
+    cwd: str = ""
 
     @property
     def program(self) -> str:
@@ -244,6 +246,7 @@ class _Builder:
     def __init__(self, parsed: ParsedScript) -> None:
         self.parsed = parsed
         self.pipeline_counter = 0
+        self.paren_depth = 0
 
     def add_line(self, lineno: int, text: str, depth: int = 0) -> None:
         try:
@@ -286,6 +289,10 @@ class _Builder:
                 self._emit(lineno, argv, redirects, pipeline, depth)
                 argv, redirects = [], []
                 pipeline = self._next_pipeline()
+                if tok == "(":
+                    self.paren_depth += 1
+                elif tok == ")":
+                    self.paren_depth = max(0, self.paren_depth - 1)
                 i += 1
                 continue
             if not argv and tok in KEYWORDS:
@@ -330,6 +337,7 @@ class _Builder:
             pipeline=pipeline,
             wrappers=tuple(wrappers),
             assignments=tuple(assignments),
+            paren_depth=self.paren_depth,
         )
         self.parsed.commands.append(cmd)
         if cmd.program in SHELLS and depth <= 4:
@@ -351,6 +359,43 @@ def parse(source: str) -> ParsedScript:
     for lineno, text in _logical_lines(source):
         builder.add_line(lineno, text)
     return parsed
+
+
+CD_PROGRAMS = frozenset({"cd", "pushd"})
+
+
+def _cd_target(cmd: SimpleCommand, cwd: str) -> str:
+    args = positional_args(cmd.args)
+    if not args:
+        return "$HOME"
+    target = args[0]
+    if target.startswith("~"):
+        return "$HOME" + target[1:]
+    if target == "-" or (target.startswith("$") and not target.startswith(("$HOME", "${HOME}"))):
+        # OLDPWD and variable directories are not tracked; keep the current
+        # directory so later paths are still classified against a known cwd.
+        return cwd
+    if target.startswith("/"):
+        return posixpath.normpath(target)
+    return posixpath.normpath(posixpath.join(cwd, target))
+
+
+def apply_cwds(parsed: ParsedScript, initial: str) -> None:
+    """Annotate every command with the working directory it runs under.
+
+    ``cd``/``pushd`` update the frame at their subshell depth; deeper frames
+    inherit the parent cwd and are discarded when the script leaves the
+    subshell, matching shell semantics closely enough for path classification.
+    """
+    frames: list[str] = [posixpath.normpath(initial)]
+    for idx, cmd in enumerate(parsed.commands):
+        frames = frames[: cmd.paren_depth + 1]
+        while len(frames) <= cmd.paren_depth:
+            frames.append(frames[-1])
+        cwd = frames[cmd.paren_depth]
+        parsed.commands[idx] = replace(cmd, cwd=cwd)
+        if cmd.program in CD_PROGRAMS:
+            frames[cmd.paren_depth] = _cd_target(cmd, cwd)
 
 
 def positional_args(

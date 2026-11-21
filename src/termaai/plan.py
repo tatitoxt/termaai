@@ -13,7 +13,7 @@ from termaai.safety.risk import (
     find_roots,
     write_targets,
 )
-from termaai.safety.shellparse import SimpleCommand, parse, positional_args
+from termaai.safety.shellparse import SimpleCommand, apply_cwds, parse, positional_args
 
 READERS = frozenset(
     {
@@ -126,13 +126,19 @@ def _effects(
 
 def build_plan(script: str, workspace: str) -> Plan:
     parsed = parse(script)
+    apply_cwds(parsed, workspace)
     plan = Plan(workspace=workspace, warnings=list(parsed.warnings))
     for cmd in parsed.commands:
         deletes = delete_targets(cmd)
         writes = write_targets(cmd)
         reads = _read_targets(cmd)
         touches = [
-            Touch(p, action, paths.resolve(p, workspace), paths.classify(p, workspace).value)
+            Touch(
+                p,
+                action,
+                paths.resolve(p, cmd.cwd or workspace),
+                paths.classify(paths.resolve(p, cmd.cwd or workspace), workspace).value,
+            )
             for action, group in (("delete", deletes), ("write", writes), ("read", reads))
             for p in group
         ]

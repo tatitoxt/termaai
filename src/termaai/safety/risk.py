@@ -24,6 +24,7 @@ from termaai.safety.shellparse import (
     WRITE_REDIRECTS,
     ParsedScript,
     SimpleCommand,
+    apply_cwds,
     inline_script,
     parse,
     positional_args,
@@ -225,6 +226,17 @@ def _tar_writes(args: tuple[str, ...]) -> list[str]:
     return out
 
 
+def _classify_target(target: str, cmd: SimpleCommand, workspace: str) -> Scope:
+    """Scope of ``target`` seen from the command's effective cwd.
+
+    ``cd`` tracking gives each command its own working directory, so relative
+    paths are first resolved against ``cmd.cwd`` and the absolute result is
+    then classified against the real workspace.
+    """
+    cwd = cmd.cwd or workspace
+    return paths.classify(paths.resolve(target, cwd), workspace)
+
+
 @rule
 def destructive_rm(parsed: ParsedScript, workspace: str) -> Iterable[Finding]:
     for cmd in parsed.commands:
@@ -237,7 +249,7 @@ def destructive_rm(parsed: ParsedScript, workspace: str) -> Iterable[Finding]:
             yield _finding("destructive_rm", RiskLevel.HIGH, cmd, "rm with --no-preserve-root")
             continue
         for target in targets:
-            scope = paths.classify(target, workspace)
+            scope = _classify_target(target, cmd, workspace)
             if scope in {Scope.ROOT, Scope.SYSTEM} or (
                 scope is Scope.HOME and recursive and paths.home_relative(target) in {"", "*"}
             ):
@@ -277,7 +289,7 @@ def write_outside_workspace(parsed: ParsedScript, workspace: str) -> Iterable[Fi
         for target in write_targets(cmd):
             if target.startswith("/dev/tcp/") or target.startswith("/dev/udp/"):
                 continue
-            scope = paths.classify(target, workspace)
+            scope = _classify_target(target, cmd, workspace)
             if scope is Scope.DEVICE:
                 continue
             if scope in {Scope.ROOT, Scope.SYSTEM}:
@@ -422,7 +434,8 @@ def insecure_permissions(parsed: ParsedScript, workspace: str) -> Iterable[Findi
         if not world_writable:
             continue
         broad = any(
-            paths.classify(t, workspace) in {Scope.ROOT, Scope.SYSTEM, Scope.HOME} for t in targets
+            _classify_target(t, cmd, workspace) in {Scope.ROOT, Scope.SYSTEM, Scope.HOME}
+            for t in targets
         )
         recursive = bool(short_flags(cmd.args) & {"R", "--recursive"})
         level = RiskLevel.HIGH if broad and recursive else RiskLevel.MEDIUM
@@ -591,6 +604,7 @@ def analyze(script: str, workspace: str = "/workspace", policy: Policy | None = 
     suppress findings from allow-listed commands and deny extra commands.
     """
     parsed = parse(script)
+    apply_cwds(parsed, workspace)
     report = RiskReport()
     seen: set[tuple[str, int, str]] = set()
     disabled = policy.disable_rules if policy else frozenset()
