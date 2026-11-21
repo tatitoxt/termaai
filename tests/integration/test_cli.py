@@ -117,6 +117,67 @@ def test_history_empty() -> None:
     assert "No history yet" in invoke(["history"]).output
 
 
+def test_policy_file_blocks_above_max_level(tmp_path: Path) -> None:
+    (tmp_path / ".termaai.toml").write_text('max_level = "low"\n')
+    result = invoke(["ask", "clean the build", "--workspace", str(tmp_path), *SUB], "y\n")
+    assert result.exit_code == EXIT_BLOCKED
+    assert "Blocked by policy" in result.output
+    assert "Run this script" not in result.output
+    record = last_record()
+    assert record["decision"] == "policy_blocked"
+    assert str(record["policy"]).endswith(".termaai.toml")
+
+
+def test_policy_deny_marks_command_as_high(tmp_path: Path) -> None:
+    (tmp_path / ".termaai.toml").write_text('deny_commands = ["tar"]\n')
+    result = invoke(["ask", "backup the workspace", "--workspace", str(tmp_path), *SUB], "y\n")
+    assert result.exit_code == EXIT_BLOCKED
+    assert "policy_deny" in result.output
+    assert "denied by the workspace policy" in result.output
+    assert not (tmp_path / "backup").exists()
+    assert last_record()["decision"] == "blocked"
+
+
+def test_policy_allow_suppresses_findings_and_runs(tmp_path: Path) -> None:
+    (tmp_path / "build").mkdir()
+    (tmp_path / ".termaai.toml").write_text('allow_commands = ["rm"]\n')
+    result = invoke(["ask", "clean the build", "--workspace", str(tmp_path), *SUB], "y\n")
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "build").exists()
+    record = last_record()
+    assert record["decision"] == "executed"
+    assert record["risk_level"] == "LOW"
+
+
+def test_broken_policy_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / ".termaai.toml").write_text("deny_commands = [42]\n")
+    result = invoke(["ask", "create a note", "--workspace", str(tmp_path), *SUB], "y\n")
+    assert result.exit_code == EXIT_ERROR
+    assert "Policy error" in result.output
+    assert not (tmp_path / "notes.txt").exists()
+
+
+def test_policy_flag_overrides_discovery(tmp_path: Path) -> None:
+    (tmp_path / ".termaai.toml").write_text('deny_commands = ["printf"]\n')
+    elsewhere = tmp_path / "elsewhere.toml"
+    elsewhere.write_text('allow_commands = ["rm"]\n')
+    result = invoke(
+        [
+            "ask",
+            "create a note",
+            "--workspace",
+            str(tmp_path),
+            "--policy",
+            str(elsewhere),
+            *SUB,
+        ],
+        "y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "notes.txt").exists()
+    assert last_record()["policy"] == str(elsewhere)
+
+
 def test_repl_session(tmp_path: Path) -> None:
     stdin = ":help\n:dry\ncreate a note\n:dry\ncreate a note\ny\n:history\n:quit\n"
     result = invoke(["repl", "--workspace", str(tmp_path), *SUB], stdin)

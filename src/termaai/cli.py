@@ -41,6 +41,16 @@ WorkspaceOpt = Annotated[
         help="Directory the script runs in. Default: a fresh temporary directory.",
     ),
 ]
+PolicyOpt = Annotated[
+    Optional[Path],  # noqa: UP007
+    typer.Option(
+        "--policy",
+        dir_okay=False,
+        exists=True,
+        readable=True,
+        help="Policy file (default: <workspace>/.termaai.toml when it exists).",
+    ),
+]
 
 
 def _console() -> Console:
@@ -85,12 +95,13 @@ def ask(
     sandbox: SandboxOpt = "auto",
     timeout: TimeoutOpt = 30.0,
     workspace: WorkspaceOpt = None,
+    policy: PolicyOpt = None,
     provider: ProviderOpt = None,
 ) -> None:
     """Generate a script for PROMPT, review it, and run it after confirmation."""
     console = _console()
     assistant = _assistant(provider, console)
-    options = RunOptions(dry_run, force, sandbox, timeout, workspace)
+    options = RunOptions(dry_run, force, sandbox, timeout, workspace, policy)
     raise typer.Exit(assistant.ask(prompt, options))
 
 
@@ -99,13 +110,14 @@ def repl(
     sandbox: SandboxOpt = "auto",
     timeout: TimeoutOpt = 30.0,
     workspace: WorkspaceOpt = None,
+    policy: PolicyOpt = None,
     provider: ProviderOpt = None,
 ) -> None:
     """Interactive session. Every request goes through the same safety pipeline."""
     console = _console()
     assistant = _assistant(provider, console)
     ws = workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
-    options = RunOptions(sandbox=sandbox, timeout=timeout, workspace=ws)
+    options = RunOptions(sandbox=sandbox, timeout=timeout, workspace=ws, policy_file=policy)
     console.print(
         escape(f"TermaAI {__version__} - provider: {assistant.provider.name}, workspace: {ws}")
         + "\n"

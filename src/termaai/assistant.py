@@ -28,6 +28,8 @@ from termaai.executor import (
 from termaai.plan import Plan, build_plan
 from termaai.providers import Provider, ProviderError
 from termaai.safety.checks import ShellCheckResult, SyntaxResult, check_syntax, run_shellcheck
+from termaai.safety.policy import Policy, PolicyError, discover
+from termaai.safety.policy import load as load_policy
 from termaai.safety.risk import RiskLevel, RiskReport, analyze
 
 EXIT_OK = 0
@@ -68,6 +70,7 @@ class RunOptions:
     sandbox: str = "auto"
     timeout: float = 30.0
     workspace: Path | None = None
+    policy_file: Path | None = None
 
 
 @dataclass
@@ -78,6 +81,7 @@ class Review:
     shellcheck: ShellCheckResult
     report: RiskReport
     plan: Plan
+    policy: Policy
 
 
 class Assistant:
@@ -96,15 +100,17 @@ class Assistant:
         self.executor_factory = executor_factory
 
     # ----------------------------------------------------------------- review
-    def review(self, script: str, workspace: Path) -> Review:
+    def review(self, script: str, workspace: Path, policy: Policy | None = None) -> Review:
         ws = str(workspace.resolve())
+        policy = policy if policy is not None else discover(workspace)
         return Review(
             script=script,
             workspace=workspace,
             syntax=check_syntax(script),
             shellcheck=run_shellcheck(script),
-            report=analyze(script, ws),
+            report=analyze(script, ws, policy),
             plan=build_plan(script, ws),
+            policy=policy,
         )
 
     def _record(self, review: Review, kind: str, decision: str, **extra: object) -> AuditRecord:
@@ -118,6 +124,7 @@ class Assistant:
             shellcheck=[i.to_dict() for i in review.shellcheck.issues],
             syntax_ok=review.syntax.ok,
             workspace=str(review.workspace),
+            policy=str(review.policy.source) if review.policy.source else None,
         )
         for key, value in extra.items():
             setattr(record, key, value)
@@ -222,7 +229,16 @@ class Assistant:
         workspace = options.workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
         workspace.mkdir(parents=True, exist_ok=True)
         workspace = workspace.resolve()
-        review = self.review(script, workspace)
+        try:
+            policy = (
+                load_policy(options.policy_file)
+                if options.policy_file is not None
+                else discover(workspace)
+            )
+        except PolicyError as exc:
+            self.console.print(f"[bold red]Policy error:[/] {escape(str(exc))}")
+            return EXIT_ERROR
+        review = self.review(script, workspace, policy)
         base = {"prompt": prompt, "source": source, "forced": options.force}
         self.show_script(script, "Generated script" if kind == "ask" else "Script")
         self.show_checks(review)
@@ -237,6 +253,14 @@ class Assistant:
             self.console.print("[cyan]Dry run:[/] nothing was executed.")
             self._record(review, kind, "dry_run", dry_run=True, **base)
             return EXIT_OK
+        if review.report.level > review.policy.max_level:
+            self.console.print(
+                f"[bold red]Blocked by policy:[/] risk {review.report.level} exceeds the "
+                f"workspace limit {review.policy.max_level} "
+                f"({review.policy.source}); not even --force can run it."
+            )
+            self._record(review, kind, "policy_blocked", **base)
+            return EXIT_BLOCKED
         high = review.report.level is RiskLevel.HIGH
         if high and not options.force:
             self.console.print(

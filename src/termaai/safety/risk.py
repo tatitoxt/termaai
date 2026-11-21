@@ -12,6 +12,10 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from itertools import pairwise
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from termaai.safety.policy import Policy
 
 from termaai.safety import paths
 from termaai.safety.paths import Scope
@@ -580,17 +584,47 @@ def package_install(parsed: ParsedScript, workspace: str) -> Iterable[Finding]:
             )
 
 
-def analyze(script: str, workspace: str = "/workspace") -> RiskReport:
-    """Run every rule against ``script`` as if executed with cwd ``workspace``."""
+def analyze(script: str, workspace: str = "/workspace", policy: Policy | None = None) -> RiskReport:
+    """Run every rule against ``script`` as if executed with cwd ``workspace``.
+
+    ``policy`` (see :mod:`termaai.safety.policy`) can disable rules by name,
+    suppress findings from allow-listed commands and deny extra commands.
+    """
     parsed = parse(script)
     report = RiskReport()
     seen: set[tuple[str, int, str]] = set()
+    disabled = policy.disable_rules if policy else frozenset()
+    allowed = (
+        {
+            (cmd.line, cmd.display())
+            for cmd in parsed.commands
+            if posixpath.basename(cmd.program) in policy.allow_commands
+        }
+        if policy and policy.allow_commands
+        else frozenset()
+    )
     for check in _RULES:
         for finding in check(parsed, workspace):
             key = (finding.rule, finding.line, finding.message)
             if key not in seen:
                 seen.add(key)
                 report.findings.append(finding)
+    report.findings = [
+        f for f in report.findings if f.rule not in disabled and (f.line, f.command) not in allowed
+    ]
+    if policy:
+        for cmd in parsed.commands:
+            prog = posixpath.basename(cmd.program)
+            denied = next((p for p in policy.deny_commands if p.fullmatch(prog)), None)
+            if denied is not None:
+                report.findings.append(
+                    _finding(
+                        "policy_deny",
+                        RiskLevel.HIGH,
+                        cmd,
+                        f"{prog!r} is denied by the workspace policy ({denied.pattern!r})",
+                    )
+                )
     report.findings.sort(key=lambda f: (-f.level, f.line, f.rule))
     return report
 
