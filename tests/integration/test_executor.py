@@ -11,6 +11,7 @@ from termaai.executor import (
     TIMEOUT_EXIT_CODE,
     DockerExecutor,
     Executor,
+    GVisorExecutor,
     Limits,
     PodmanExecutor,
     SandboxError,
@@ -196,3 +197,23 @@ def test_podman_executor_uses_podman_binary_and_name(tmp_path: Path) -> None:
     assert cmd[0] == "podman" and executor.name == "podman"
     joined = " ".join(cmd)
     assert "--network none" in joined and "--read-only" in joined
+
+
+def test_gvisor_command_adds_runsc_runtime(tmp_path: Path) -> None:
+    cmd = GVisorExecutor(image="img").command(
+        tmp_path, tmp_path / "s.sh", Limits(), "n"
+    )
+    joined = " ".join(cmd)
+    assert "--runtime runsc" in joined
+    assert "--network none" in joined  # base hardening still applies
+    assert GVisorExecutor.name == "gvisor"
+
+
+def test_select_executor_gvisor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("termaai.executor.docker_available", lambda docker="docker": True)
+    monkeypatch.setattr("termaai.executor.shutil.which", lambda b: "/usr/bin/runsc")
+    assert isinstance(select_executor("gvisor"), GVisorExecutor)
+    # runsc missing -> clear error, never a silent fallback
+    monkeypatch.setattr("termaai.executor.shutil.which", lambda b: None)
+    with pytest.raises(SandboxError, match="runsc is not installed"):
+        select_executor("gvisor")

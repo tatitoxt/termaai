@@ -27,7 +27,7 @@ deterministic, inspectable gate between the model and your machine.
 | ShellCheck findings when `shellcheck` is installed | `safety/checks.py` | `tests/unit/test_checks.py` |
 | Rule-based **risk analyzer** with LOW / MEDIUM / HIGH and a per-finding explanation and line number | `safety/risk.py`, `safety/shellparse.py`, `safety/paths.py` | labelled corpus of 69 dangerous + 23 safe scripts in `tests/corpus/` |
 | **Dry-run**: parsed command plan, effects (read/write/delete/network/...) and touched paths, nothing executed | `plan.py` | unit, integration, E2E |
-| **Container sandbox** (Docker or rootless Podman): `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout) |
+| **Container sandbox** (Docker, rootless Podman, or gVisor `runsc` via `--sandbox gvisor`): `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout, runsc flag) |
 | **Subprocess fallback** in a temporary workspace: scrubbed env, rlimits, timeout, process-group kill | `executor.py` | integration + E2E |
 | Confirmation always required; HIGH risk blocked unless `--force` **and** typing `run high-risk` | `assistant.py` | E2E confirm / deny / force flows |
 | **Edit before run** (`--edit` / `-e`): the generated script opens in `$EDITOR`; an accepted edit is re-checked, re-analyzed and re-shown before the confirmation, and `edited: true` is recorded in the audit log. An aborted or emptied edit runs nothing | `assistant.py` | `test_cli.py` (edit → executes, fixes a HIGH script, abort/empty → denied) |
@@ -231,8 +231,8 @@ exactly those two IDs and fails on anything else.
 
 - Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
   tokenizer.
-- Optional gVisor backend (`runsc`) and a curated sandbox image with common
-  tools but still no network.
+- A curated sandbox image with common tools (the gVisor `runsc` backend ships;
+  `--sandbox gvisor` runs the same hardened container under a userspace kernel).
 - Record and replay of provider responses for regression tests on real model output.
 
 ## License

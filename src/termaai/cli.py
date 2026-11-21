@@ -33,7 +33,7 @@ SandboxOpt = Annotated[
     str,
     typer.Option(
         "--sandbox",
-        help="auto (Docker, then Podman, if available), docker, podman or subprocess.",
+        help="auto (Docker, then Podman, if available), docker, podman, gvisor or subprocess.",
     ),
 ]
 TimeoutOpt = Annotated[float, typer.Option("--timeout", min=1, help="Execution timeout (s).")]
