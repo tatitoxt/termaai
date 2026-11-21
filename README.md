@@ -27,7 +27,7 @@ deterministic, inspectable gate between the model and your machine.
 | ShellCheck findings when `shellcheck` is installed | `safety/checks.py` | `tests/unit/test_checks.py` |
 | Rule-based **risk analyzer** with LOW / MEDIUM / HIGH and a per-finding explanation and line number | `safety/risk.py`, `safety/shellparse.py`, `safety/paths.py` | labelled corpus of 69 dangerous + 23 safe scripts in `tests/corpus/` |
 | **Dry-run**: parsed command plan, effects (read/write/delete/network/...) and touched paths, nothing executed | `plan.py` | unit, integration, E2E |
-| **Docker sandbox**: `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout) |
+| **Container sandbox** (Docker or rootless Podman): `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout) |
 | **Subprocess fallback** in a temporary workspace: scrubbed env, rlimits, timeout, process-group kill | `executor.py` | integration + E2E |
 | Confirmation always required; HIGH risk blocked unless `--force` **and** typing `run high-risk` | `assistant.py` | E2E confirm / deny / force flows |
 | **Edit before run** (`--edit` / `-e`): the generated script opens in `$EDITOR`; an accepted edit is re-checked, re-analyzed and re-shown before the confirmation, and `edited: true` is recorded in the audit log. An aborted or emptied edit runs nothing | `assistant.py` | `test_cli.py` (edit → executes, fixes a HIGH script, abort/empty → denied) |
@@ -53,7 +53,7 @@ Finding IDs the analyzer can report (each has a corpus example in `tests/corpus/
 
 ## Quickstart
 
-Requirements: Linux, Python 3.10+, Bash. Optional: Docker (for the real sandbox) and
+Requirements: Linux, Python 3.10+, Bash. Optional: Docker or Podman (for the real sandbox) and
 ShellCheck.
 
 ```bash
@@ -130,7 +130,7 @@ were only tested against a local HTTP stub, not against the live APIs.
 | --- | --- |
 | `TERMAAI_PROVIDER` | `fake` (default), `openai`, `groq` |
 | `TERMAAI_HOME` | Where `history.jsonl` lives (default `$XDG_DATA_HOME/termaai` or `~/.local/share/termaai`) |
-| `TERMAAI_SANDBOX_IMAGE` | Docker image for the sandbox (default `bash:5.2`) |
+| `TERMAAI_SANDBOX_IMAGE` | Container image for the sandbox (default `bash:5.2`) |
 | `TERMAAI_SHELLCHECK` | Path to a `shellcheck` binary, or `off` to disable |
 
 A `.termaai.toml` in the workspace (or `--policy FILE`) tightens the analyzer
@@ -228,7 +228,7 @@ exactly those two IDs and fails on anything else.
 
 - Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
   tokenizer, and track `cd` for relative paths.
-- Optional gVisor / rootless Podman backends and a curated sandbox image with common
+- Optional gVisor backend (`runsc`) and a curated sandbox image with common
   tools but still no network.
 - Record and replay of provider responses for regression tests on real model output.
 

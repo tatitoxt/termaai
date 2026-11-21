@@ -268,6 +268,15 @@ class DockerExecutor:
         )
 
 
+class PodmanExecutor(DockerExecutor):
+    """Rootless Podman backend — same flags, different binary and image default."""
+
+    name = "podman"
+
+    def __init__(self, image: str | None = None, podman: str = "podman") -> None:
+        super().__init__(image=image, docker=podman)
+
+
 def docker_available(docker: str = "docker") -> bool:
     if shutil.which(docker) is None:
         return False
@@ -284,13 +293,24 @@ def docker_available(docker: str = "docker") -> bool:
 
 
 def select_executor(mode: str = "auto") -> Executor:
-    """Pick a backend: ``docker``, ``subprocess`` or ``auto`` (Docker when available)."""
+    """Pick a backend: ``docker``, ``podman``, ``subprocess`` or ``auto``.
+
+    ``auto`` prefers Docker, then Podman, then the subprocess fallback.
+    """
     if mode == "subprocess":
         return SubprocessExecutor()
     if mode == "docker":
         if not docker_available():
             raise SandboxError("Docker sandbox requested but the Docker daemon is not reachable")
         return DockerExecutor()
+    if mode == "podman":
+        if not docker_available("podman"):
+            raise SandboxError("Podman sandbox requested but podman is not installed")
+        return PodmanExecutor()
     if mode != "auto":
         raise SandboxError(f"unknown sandbox mode {mode!r}")
-    return DockerExecutor() if docker_available() else SubprocessExecutor()
+    if docker_available():
+        return DockerExecutor()
+    if docker_available("podman"):
+        return PodmanExecutor()
+    return SubprocessExecutor()
