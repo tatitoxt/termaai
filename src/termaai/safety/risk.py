@@ -106,6 +106,13 @@ _INLINE_VALUE_OPTS: dict[str, set[str]] = {
     "lua": {"-l"},
     "php": {"-f", "-d", "-z"},
 }
+# Options whose value is attached inside the same token: once the letter is
+# seen, the remainder of the arg is that option's value, never more flags
+# (``ruby -x/dev -e code`` — "/dev" is -x's directory, not flags d/e/v).
+_ATTACHED_VALUE_OPTS: dict[str, set[str]] = {
+    "ruby": {"-x"},
+    "perl": {"-x"},
+}
 # Interpreters that reject ``-eCODE`` and only take code as a separate
 # argument (node: ``bad option``), so a non-empty suffix keeps scanning.
 _NO_ATTACHED_CODE = {"node"}
@@ -317,7 +324,10 @@ def _inline_code(cmd: SimpleCommand) -> str | None:
             idx += 2 if following is not None else 1
             continue
         if arg.startswith("-") and not arg.startswith("--"):
+            attached = _ATTACHED_VALUE_OPTS.get(prog, set())
             for pos, letter in enumerate(arg[1:], start=2):
+                if f"-{letter}" in attached:
+                    break
                 if f"-{letter}" in options:
                     rest = arg[pos:]
                     if not rest:
