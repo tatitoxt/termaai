@@ -279,3 +279,55 @@ def test_ask_in_docker_sandbox(tmp_path: Path, docker_ready: None) -> None:
     assert result.exit_code == 0, result.output
     assert (tmp_path / "notes.txt").exists()
     assert last_record()["sandbox"] == "docker"
+
+def test_edit_before_run_replaces_script_and_audits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("click.edit", lambda text, **kw: text + "echo edited marker\n")
+    result = invoke(
+        ["ask", "create a note", "--workspace", str(tmp_path), "--edit", *SUB],
+        "y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Edited script accepted" in result.output
+    record = last_record()
+    assert record["decision"] == "executed"
+    assert record["edited"] is True
+
+
+def test_edit_can_fix_a_high_risk_script(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("click.edit", lambda text, **kw: "echo safe now\n")
+    result = invoke(
+        ["ask", "install the tool", "--workspace", str(tmp_path),
+         "--edit", "--revise", "0", *SUB],
+        "y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Edited script accepted" in result.output
+    record = last_record()
+    assert record["decision"] == "executed"
+    assert record["edited"] is True
+    assert record["risk_level"] == "LOW"
+
+
+def test_edit_aborted_runs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("click.edit", lambda text, **kw: None)
+    result = invoke(
+        ["ask", "create a note", "--workspace", str(tmp_path), "--edit", *SUB],
+    )
+    assert result.exit_code == EXIT_DENIED, result.output
+    assert "Edit aborted" in result.output
+    assert not (tmp_path / "notes.txt").exists()
+    assert last_record()["decision"] == "denied"
+
+
+def test_edit_emptied_script_runs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("click.edit", lambda text, **kw: "   \n")
+    result = invoke(
+        ["ask", "create a note", "--workspace", str(tmp_path), "--edit", *SUB],
+    )
+    assert result.exit_code == EXIT_DENIED, result.output
+    assert "Edited script is empty" in result.output
+    assert last_record()["decision"] == "denied"
