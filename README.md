@@ -22,6 +22,7 @@ deterministic, inspectable gate between the model and your machine.
 | --- | --- | --- |
 | `termaai ask "..."`, interactive REPL (`termaai` / `termaai repl`), `termaai explain script.sh`, `termaai history` | `src/termaai/cli.py` | `tests/integration/test_cli.py`, `tests/e2e/` |
 | Deterministic offline **fake provider** (default, no API key) | `providers/fake.py` | all tests and the demo |
+| **Record/replay**: `TERMAAI_RECORD_FILE` captures real provider calls as JSONL; `--provider replay` serves them verbatim and fails on any divergence | `providers/replay.py` | `test_replay_provider.py` |
 | **OpenAI** and **Groq** providers, opt-in via env vars (stdlib HTTP client, no SDK) | `providers/openai_compat.py` | `test_cli.py` against a local HTTP stub (no real API calls) |
 | `bash -n` syntax check (scripts that do not parse are blocked) | `safety/checks.py` | unit, integration, E2E |
 | ShellCheck findings when `shellcheck` is installed | `safety/checks.py` | `tests/unit/test_checks.py` |
@@ -118,6 +119,10 @@ sandbox error, `124` timeout.
 export TERMAAI_PROVIDER=openai OPENAI_API_KEY=...   # default model gpt-4o-mini
 export TERMAAI_PROVIDER=groq   GROQ_API_KEY=...     # default model llama-3.1-8b-instant
 # optional: TERMAAI_MODEL, TERMAAI_OPENAI_BASE_URL, TERMAAI_GROQ_BASE_URL
+
+# Record/replay: capture a real session once, replay it offline forever.
+export TERMAAI_RECORD_FILE=fixtures/live-session.jsonl   # append every call while you work
+termaai --provider replay "..."                        # TERMAAI_REPLAY_FILE overrides the default path
 termaai ask "find the five largest files here"
 ```
 
@@ -233,7 +238,6 @@ exactly those two IDs and fails on anything else.
   tokenizer.
 - A curated sandbox image with common tools (the gVisor `runsc` backend ships;
   `--sandbox gvisor` runs the same hardened container under a userspace kernel).
-- Record and replay of provider responses for regression tests on real model output.
 
 ## License
 
