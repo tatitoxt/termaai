@@ -30,6 +30,7 @@ deterministic, inspectable gate between the model and your machine.
 | **Docker sandbox**: `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout) |
 | **Subprocess fallback** in a temporary workspace: scrubbed env, rlimits, timeout, process-group kill | `executor.py` | integration + E2E |
 | Confirmation always required; HIGH risk blocked unless `--force` **and** typing `run high-risk` | `assistant.py` | E2E confirm / deny / force flows |
+| **Edit before run** (`--edit` / `-e`): the generated script opens in `$EDITOR`; an accepted edit is re-checked, re-analyzed and re-shown before the confirmation, and `edited: true` is recorded in the audit log. An aborted or emptied edit runs nothing | `assistant.py` | `test_cli.py` (edit → executes, fixes a HIGH script, abort/empty → denied) |
 | **Revision loop** (`--revise N`, default 2): when a script would be blocked (syntax error, HIGH risk without `--force`, or above the policy `max_level`), the findings are fed back to providers implementing the `Reviser` protocol for a safer rewrite; the audit log records how many revisions ran | `assistant.py`, `providers/base.py` | `test_cli.py` (revise → executes, satisfies a `max_level=low` policy), `test_providers.py` |
 | **Per-workspace policy files** (`.termaai.toml` or `--policy FILE`): `deny_commands` regexes add HIGH findings, `allow_commands` suppresses findings from trusted tools, `disable_rules` skips analyzer rules by name, `max_level` caps what may run — anything above is blocked unconditionally, even with `--force` | `safety/policy.py` | `tests/unit/test_policy.py`, CLI flows in `test_cli.py` |
 | JSONL **audit history** (prompt, script + SHA-256, risk level and findings, decision, sandbox, exit code), file mode `0600` | `audit.py` | unit, integration, E2E |
@@ -189,7 +190,7 @@ it: confirm, deny, empty answer (defaults to no), HIGH-risk block, `--force` wit
 and with the correct second confirmation, timeout, dry-run, a REPL session, `explain`
 and `history`. Several of these run in both the Docker and the subprocess sandbox.
 
-Measured in this repository at the time of writing (`pytest -q`): **247 tests**
+Measured in this repository at the time of writing (`pytest -q`): **251 tests**
 (169 unit, 40 integration, 13 E2E) passing locally with Docker
 and ShellCheck available; CI runs the same suites on Python 3.10 and 3.12.
 
@@ -227,7 +228,6 @@ exactly those two IDs and fails on anything else.
 
 - Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
   tokenizer, and track `cd` for relative paths.
-- Let the user edit a generated script before running it.
 - Optional gVisor / rootless Podman backends and a curated sandbox image with common
   tools but still no network.
 - Record and replay of provider responses for regression tests on real model output.

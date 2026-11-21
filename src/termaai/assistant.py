@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
+import click
 from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
@@ -46,6 +47,8 @@ class Prompter(Protocol):
 
     def text(self, question: str) -> str: ...
 
+    def edit(self, script: str) -> str | None: ...
+
 
 class ConsolePrompter:
     """Reads answers from the terminal; anything but y/yes (or EOF) means no."""
@@ -63,6 +66,13 @@ class ConsolePrompter:
             self.console.print()
             return ""
 
+    def edit(self, script: str) -> str | None:
+        """Opens the script in $EDITOR; None when the edit was aborted."""
+        try:
+            return click.edit(script, extension=".sh")
+        except click.ClickException:
+            return None
+
 
 @dataclass
 class RunOptions:
@@ -74,6 +84,8 @@ class RunOptions:
     policy_file: Path | None = None
     # Re-generations fed with analyzer findings when a script is blocked.
     revise: int = 2
+    # Open the generated script in $EDITOR before running it.
+    edit: bool = False
 
 
 @dataclass
@@ -322,6 +334,25 @@ class Assistant:
         self.show_script(script, "Generated script" if kind == "ask" else "Script")
         self.show_checks(review)
         self.show_risk(review.report)
+
+        if options.edit:
+            edited = self.prompter.edit(script)
+            if edited is None:
+                self.console.print("[cyan]Edit aborted; nothing was run.[/]")
+                self._record(review, kind, "denied", **base)
+                return EXIT_DENIED
+            if not edited.strip():
+                self.console.print("[bold red]Edited script is empty; nothing was run.[/]")
+                self._record(review, kind, "denied", **base)
+                return EXIT_DENIED
+            if edited != script:
+                script = edited
+                base["edited"] = True
+                review = self.review(script, workspace, policy)
+                self.console.print("[cyan]Edited script accepted; re-running checks.[/]")
+                self.show_script(script, "Edited script")
+                self.show_checks(review)
+                self.show_risk(review.report)
 
         if not review.syntax.ok:
             self.console.print("[bold red]Blocked:[/] the script does not parse; nothing was run.")

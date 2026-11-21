@@ -105,11 +105,17 @@ def ask(
             help="Times to feed analyzer findings back to the provider for a safer script.",
         ),
     ] = 2,
+    edit: Annotated[
+        bool,
+        typer.Option(
+            "--edit", "-e", help="Open the generated script in $EDITOR before running it."
+        ),
+    ] = False,
 ) -> None:
     """Generate a script for PROMPT, review it, and run it after confirmation."""
     console = _console()
     assistant = _assistant(provider, console)
-    options = RunOptions(dry_run, force, sandbox, timeout, workspace, policy, revise)
+    options = RunOptions(dry_run, force, sandbox, timeout, workspace, policy, revise, edit)
     raise typer.Exit(assistant.ask(prompt, options))
 
 
