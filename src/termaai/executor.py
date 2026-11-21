@@ -178,15 +178,18 @@ class SubprocessExecutor:
 
 class DockerExecutor:
     name = "docker"
+    runtime: str | None = None
 
     def __init__(self, image: str | None = None, docker: str = "docker") -> None:
         self.image = image or os.environ.get("TERMAAI_SANDBOX_IMAGE") or DEFAULT_IMAGE
         self.docker = docker
 
     def command(self, workspace: Path, script_path: Path, limits: Limits, name: str) -> list[str]:
+        runtime_args = ["--runtime", self.runtime] if self.runtime else []
         return [
             self.docker,
             "run",
+            *runtime_args,
             "--rm",
             "--name",
             name,
@@ -268,6 +271,13 @@ class DockerExecutor:
         )
 
 
+class GVisorExecutor(DockerExecutor):
+    """gVisor (runsc) backend — the Docker sandbox under a userspace kernel."""
+
+    name = "gvisor"
+    runtime = "runsc"
+
+
 class PodmanExecutor(DockerExecutor):
     """Rootless Podman backend — same flags, different binary and image default."""
 
@@ -307,6 +317,12 @@ def select_executor(mode: str = "auto") -> Executor:
         if not docker_available("podman"):
             raise SandboxError("Podman sandbox requested but podman is not installed")
         return PodmanExecutor()
+    if mode == "gvisor":
+        if shutil.which("runsc") is None:
+            raise SandboxError("gVisor sandbox requested but runsc is not installed")
+        if not docker_available():
+            raise SandboxError("gVisor sandbox requested but the Docker daemon is not reachable")
+        return GVisorExecutor()
     if mode != "auto":
         raise SandboxError(f"unknown sandbox mode {mode!r}")
     if docker_available():
