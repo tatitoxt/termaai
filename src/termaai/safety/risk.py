@@ -100,7 +100,9 @@ _INLINE_VALUE_OPTS: dict[str, set[str]] = {
     "python": {"-m", "-W", "-X"},
     "node": {"-r"},
     "perl": {"-m", "-M", "-I"},
-    "ruby": {"-r", "-I", "-x"},
+    # ruby -x takes only an optional attached directory: `-x -e code` leaves
+    # -e active, so -x must not consume the next argument.
+    "ruby": {"-r", "-I"},
     "lua": {"-l"},
     "php": {"-f", "-d", "-z"},
 }
