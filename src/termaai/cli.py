@@ -30,7 +30,11 @@ ProviderOpt = Annotated[
     typer.Option("--provider", help="fake (default), openai or groq. Env: TERMAAI_PROVIDER."),
 ]
 SandboxOpt = Annotated[
-    str, typer.Option("--sandbox", help="auto (Docker if available), docker or subprocess.")
+    str,
+    typer.Option(
+        "--sandbox",
+        help="auto (Docker, then Podman, if available), docker, podman or subprocess.",
+    ),
 ]
 TimeoutOpt = Annotated[float, typer.Option("--timeout", min=1, help="Execution timeout (s).")]
 WorkspaceOpt = Annotated[

@@ -12,6 +12,7 @@ from termaai.executor import (
     DockerExecutor,
     Executor,
     Limits,
+    PodmanExecutor,
     SandboxError,
     SubprocessExecutor,
     select_executor,
@@ -127,6 +128,15 @@ def test_select_executor_modes(monkeypatch: pytest.MonkeyPatch) -> None:
         select_executor("vm")
     monkeypatch.setattr("termaai.executor.docker_available", lambda docker="docker": True)
     assert isinstance(select_executor("auto"), DockerExecutor)
+    # Podman-only host: auto falls back to Podman before the subprocess guard-rail.
+    monkeypatch.setattr(
+        "termaai.executor.docker_available", lambda docker="docker": docker == "podman"
+    )
+    assert isinstance(select_executor("auto"), PodmanExecutor)
+    assert isinstance(select_executor("podman"), PodmanExecutor)
+    monkeypatch.setattr("termaai.executor.docker_available", lambda docker="docker": False)
+    with pytest.raises(SandboxError, match="podman is not installed"):
+        select_executor("podman")
 
 
 def test_missing_image_raises(tmp_path: Path, docker_ready: None) -> None:
@@ -178,3 +188,11 @@ def test_relative_workspace_gives_absolute_home(
     assert result.exit_code == 0
     assert result.stdout.strip() == str(tmp_path / "ws")
     assert (tmp_path / "ws" / "x").exists()
+
+
+def test_podman_executor_uses_podman_binary_and_name(tmp_path: Path) -> None:
+    executor = PodmanExecutor(image="img")
+    cmd = executor.command(tmp_path, tmp_path / "s.sh", Limits(memory_mb=64), "n")
+    assert cmd[0] == "podman" and executor.name == "podman"
+    joined = " ".join(cmd)
+    assert "--network none" in joined and "--read-only" in joined
