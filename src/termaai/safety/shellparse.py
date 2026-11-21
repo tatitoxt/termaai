@@ -11,7 +11,18 @@ from __future__ import annotations
 import posixpath
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
+from typing import Any
+
+_GRAMMAR_PARSER: Any = None
+try:  # optional grammar backend; the hand-written tokenizer remains the fallback
+    import tree_sitter as _ts
+    import tree_sitter_bash as _tsb
+
+    _GRAMMAR_PARSER = _ts.Parser(_ts.Language(_tsb.language()))
+except Exception:  # pragma: no cover - dependency absent
+    pass
 
 SEPARATORS = frozenset({";", "&&", "||", "&", ";;", ";&", ";;&", "(", ")", "{", "}", "|&"})
 PIPE = "|"
@@ -354,11 +365,220 @@ def inline_script(args: tuple[str, ...]) -> str | None:
 
 
 def parse(source: str) -> ParsedScript:
+    parsed = _parse_grammar(source)
+    if parsed is not None:
+        return parsed
     parsed = ParsedScript(source=source)
     builder = _Builder(parsed)
     for lineno, text in _logical_lines(source):
         builder.add_line(lineno, text)
     return parsed
+
+
+# --- tree-sitter grammar backend ---------------------------------------------
+
+_DEPTH_NODES = frozenset({"subshell", "command_substitution", "process_substitution"})
+_COMMAND_NODES = frozenset({"command", "declaration_command", "unset_command", "test_command"})
+_CONTAINER_NODES = frozenset({
+    "program", "list", "if_statement", "elif_clause", "else_clause",
+    "while_statement", "for_statement", "c_style_for_statement", "do_group",
+    "case_statement", "case_item", "function_definition", "compound_statement",
+    "negated_command",
+})
+
+
+def _has_error(node: Any) -> bool:
+    if node.type in ("ERROR", "MISSING") or node.is_missing:
+        return True
+    return any(_has_error(c) for c in node.children)
+
+
+def _redirect_text(source: bytes, node: Any) -> tuple[str, str] | None:
+    """Return (operator, target) for a file_redirect/heredoc_redirect node.
+
+    A leading file descriptor (`2>`) folds into the operator. Pure fd
+    duplication (`2>&1`) is not a file redirect and is skipped.
+    """
+    named = [c for c in node.children if c.is_named]
+    if not named:
+        return None
+    dest = named[-1]
+    if dest.type in ("file_descriptor", "number"):
+        return None
+    raw = source[node.start_byte : dest.start_byte].decode("utf-8", "replace").strip()
+    op = raw.lstrip("0123456789") if raw[:1].isdigit() else raw
+    return op, _word_text(dest, source)
+
+
+def _walk(
+    node: Any, source: bytes, out: list[SimpleCommand], depth: int, pipes: Iterator[int]
+) -> None:
+    if node.is_missing or node.type == "ERROR":
+        raise ValueError("unparseable input")
+    t = node.type
+    if t in _COMMAND_NODES:
+        cmd = _grammar_command(node, source, depth, pipes)
+        _walk_subs(node, source, out, depth, pipes)
+        out.append(cmd)
+        if cmd.program in SHELLS:
+            script = inline_script(cmd.args)
+            if script:
+                inner_tree = _GRAMMAR_PARSER.parse(script.encode("utf-8"))
+                _walk(inner_tree.root_node, script.encode("utf-8"), out, depth, pipes)
+        return
+    if t == "redirected_statement":
+        start = len(out)
+        for child in node.children:
+            if child.is_named and child.type not in ("file_redirect", "heredoc_redirect"):
+                _walk(child, source, out, depth, pipes)
+        redirects = tuple(
+            rt for c in node.children if c.type in ("file_redirect", "heredoc_redirect")
+            for rt in [_redirect_text(source, c)] if rt
+        )
+        # attach to the last command emitted at this depth — nested substitution
+        # commands emitted after the parent must not receive its redirect
+        if redirects:
+            for i in range(len(out) - 1, start - 1, -1):
+                if out[i].paren_depth == depth:
+                    last = out[i]
+                    out[i] = replace(last, redirects=last.redirects + tuple(
+                        Redirect(op=o, target=t) for o, t in redirects))
+                    break
+        if start == len(out):
+            for child in node.children:
+                if child.is_named:
+                    _walk(child, source, out, depth, pipes)
+        return
+    if t == "pipeline":
+        pid: int = next(pipes)
+        for child in node.children:
+            if child.is_named and child.type != "comment":
+                _walk(child, source, out, depth, iter([pid] * 1_000_000))
+        return
+    if t in _DEPTH_NODES:
+        for child in node.children:
+            if child.is_named:
+                _walk(child, source, out, depth + 1, pipes)
+        return
+    if t in _CONTAINER_NODES or node.named_child_count:
+        for child in node.children:
+            if child.is_named and child.type != "comment":
+                _walk(child, source, out, depth, pipes)
+
+
+def _word_text(node: Any, source: bytes) -> str:
+    """Token text with quotes removed, matching the hand tokenizer's output."""
+    t = node.type
+    if t in ("raw_string", "ansi_c_string"):
+        text = source[node.start_byte : node.end_byte].decode("utf-8", "replace")
+        return text[text.index("'") + 1 : -1] if "'" in text else text
+    if t == "string":
+        inner = "".join(
+            _word_text(c, source) for c in node.children if c.is_named
+        )
+        return inner if inner else source[node.start_byte : node.end_byte].decode(
+            "utf-8", "replace").strip('"')
+    if t == "concatenation":
+        return "".join(
+            _word_text(c, source) for c in node.children if c.is_named
+        )
+    return source[node.start_byte : node.end_byte].decode("utf-8", "replace")
+
+
+def _command_words(node: Any, source: bytes) -> list[str]:
+    """argv words of a `command` node: name + argument children, unquoted text."""
+    return [
+        _word_text(c, source)
+        for c in node.children
+        if c.is_named and c.type not in (
+            "variable_assignment", "file_redirect", "heredoc_redirect",
+            "command_substitution", "process_substitution")
+    ]
+
+
+def _walk_subs(
+    node: Any, source: bytes, out: list[SimpleCommand], depth: int, pipes: Iterator[int]
+) -> None:
+    """Emit commands inside $( )/ <( )/ `(backtick)` found anywhere in a command's args."""
+    for child in node.children:
+        if not child.is_named:
+            continue
+        if child.type in ("command_substitution", "subshell"):
+            _walk(child, source, out, depth, pipes)
+        elif child.type == "process_substitution" or child.type in _COMMAND_NODES:
+            continue  # process-subst content is already inlined into the parent argv
+        else:
+            _walk_subs(child, source, out, depth, pipes)
+
+
+def _grammar_command(node: Any, source: bytes, depth: int, pipes: Iterator[int]) -> SimpleCommand:
+    argv: list[str] = []
+    assignments: list[str] = []
+    redirects: list[tuple[str, str]] = []
+    if node.type == "test_command":
+        text = source[node.start_byte : node.end_byte].decode("utf-8", "replace")
+        op = "[[" if text.startswith("[[") else "["
+        inner = [
+            source[g.start_byte : g.end_byte].decode("utf-8", "replace")
+            for c in node.children if c.is_named
+            for g in (c.children if c.type in ("unary_expression", "binary_expression") else (c,))
+            if g.is_named
+        ]
+        return SimpleCommand(
+            line=node.start_point[0] + 1,
+            argv=tuple([op, *inner, op.replace("[", "]")]),
+            pipeline=next(pipes),
+            paren_depth=depth,
+        )
+    named = [c for c in node.children if c.is_named]
+    for child in named:
+        if child.type == "command_name":
+            argv.append(_word_text(child, source))
+        elif child.type == "variable_assignment":
+            assignments.append(source[child.start_byte : child.end_byte].decode("utf-8", "replace"))
+        elif child.type in ("file_redirect", "heredoc_redirect"):
+            rt = _redirect_text(source, child)
+            if rt:
+                redirects.append(rt)
+        elif child.type == "command_substitution":
+            continue  # opaque substitution arg — the inner commands are emitted separately
+        elif child.type == "process_substitution":
+            redirects.append(("<", "("))
+            for inner_cmd in child.children:
+                if inner_cmd.is_named and inner_cmd.type == "command":
+                    argv.extend(_command_words(inner_cmd, source))
+        else:
+            argv.append(_word_text(child, source))
+    # nested substitutions inside arguments run their own commands
+    wrappers, argv = _unwrap(argv)
+    lineno = node.start_point[0] + 1
+    return SimpleCommand(
+        line=lineno,
+        argv=tuple(argv),
+        redirects=tuple(Redirect(op=o, target=t) for o, t in redirects),
+        pipeline=next(pipes),
+        wrappers=tuple(wrappers),
+        assignments=tuple(assignments),
+        paren_depth=depth,
+    )
+
+
+def _parse_grammar(source: str) -> ParsedScript | None:
+    """Parse via the real Bash grammar (tree-sitter); None when unavailable/failed."""
+    if _GRAMMAR_PARSER is None:
+        return None
+    try:
+        tree = _GRAMMAR_PARSER.parse(source.encode("utf-8"))
+        if _has_error(tree.root_node):
+            return None
+        parsed = ParsedScript(source=source)
+        src = source.encode("utf-8")
+        pipes = iter(range(1, 1_000_000_000))
+        _walk(tree.root_node, src, parsed.commands, 0, pipes)
+        parsed.commands.sort(key=lambda c: (c.line))
+        return parsed
+    except Exception:
+        return None
 
 
 CD_PROGRAMS = frozenset({"cd", "pushd"})
