@@ -171,9 +171,11 @@ flowchart LR
     PL --> A
 ```
 
-The analyzer does not execute anything: it tokenizes the script (quotes, pipelines,
-redirections, `$(...)` / backticks, `bash -c '...'`, heredocs, `sudo`/`env`/`xargs`
-wrappers), tracks `cd`/`pushd` per command — including subshell scoping, so a `cd`
+The analyzer does not execute anything: it parses the script — with the official
+`tree-sitter-bash` grammar, falling back to a hand-written tokenizer when the grammar
+rejects the input — covering quotes, pipelines, redirections, `$(...)` / backticks,
+`bash -c '...'`, heredocs and `sudo`/`env`/`xargs` wrappers, tracks `cd`/`pushd` per
+command — including subshell scoping, so a `cd`
 inside `( ... )` does not leak — resolves each path argument against that command's
 effective working directory, and applies small rule functions to each simple command
 and pipeline. This means `cd /etc && rm -rf passwd` is flagged as a HIGH system-path
@@ -226,16 +228,15 @@ exactly those two IDs and fails on anything else.
   it, so a forced `curl | sh` simply fails with exit code 127 there.
 - Paths are classified for the workspace given at analysis time; scripts that `cd`
   elsewhere and then use relative paths are only partially tracked.
+- The command parser uses the official `tree-sitter-bash` grammar and falls back to a
+  hand-written tokenizer on inputs the grammar rejects; the two backends agree on the
+  emitted command list, but only for the constructs covered by the test corpus.
 - The fake provider only knows a handful of phrases. The OpenAI/Groq clients were tested
   against a local HTTP stub, not live APIs, and have no streaming or retries.
 - Developed and tested on Linux only (rlimits, process groups, Docker). macOS and
   Windows are untested.
 - No authentication, multi-user setup or log rotation for the audit file.
 
-## Roadmap
-
-- Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
-  tokenizer.
 ## License
 
 [MIT](LICENSE) © Fausto Pastura
