@@ -135,7 +135,7 @@ were only tested against a local HTTP stub, not against the live APIs.
 | --- | --- |
 | `TERMAAI_PROVIDER` | `fake` (default), `openai`, `groq` |
 | `TERMAAI_HOME` | Where `history.jsonl` lives (default `$XDG_DATA_HOME/termaai` or `~/.local/share/termaai`) |
-| `TERMAAI_SANDBOX_IMAGE` | Container image for the sandbox (default `bash:5.2`) |
+| `TERMAAI_SANDBOX_IMAGE` | Container image for the sandbox (default `bash:5.2`). Build the curated image — bash plus jq, Python 3, git, curl, tar/xz/gzip and friends — with `docker build -t termaai-sandbox sandbox/` ([`sandbox/Dockerfile`](sandbox/Dockerfile)), then set `TERMAAI_SANDBOX_IMAGE=termaai-sandbox` |
 | `TERMAAI_SHELLCHECK` | Path to a `shellcheck` binary, or `off` to disable |
 
 A `.termaai.toml` in the workspace (or `--policy FILE`) tightens the analyzer
@@ -236,9 +236,6 @@ exactly those two IDs and fails on anything else.
 
 - Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
   tokenizer.
-- A curated sandbox image with common tools (the gVisor `runsc` backend ships;
-  `--sandbox gvisor` runs the same hardened container under a userspace kernel).
-
 ## License
 
 [MIT](LICENSE) © Fausto Pastura
