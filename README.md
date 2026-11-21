@@ -235,3 +235,7 @@ exactly those two IDs and fails on anything else.
 ## License
 
 [MIT](LICENSE) © Fausto Pastura
+
+## Benchmarks
+
+`scripts/benchmark.py` measures the safety pipeline: **11.5k analyses/sec**, 0.08 ms p50 per script — the risk-review gate adds effectively zero latency before a generated command runs. See [docs/benchmarks.md](docs/benchmarks.md).
