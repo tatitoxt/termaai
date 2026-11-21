@@ -36,6 +36,7 @@ class AuditRecord:
     syntax_ok: bool = True
     forced: bool = False
     dry_run: bool = False
+    revisions: int = 0
     sandbox: str | None = None
     exit_code: int | None = None
     duration_s: float | None = None

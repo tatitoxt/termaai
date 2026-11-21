@@ -5,7 +5,13 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-from termaai.providers.base import Generation, Provider, ProviderError, extract_script
+from termaai.providers.base import (
+    Generation,
+    Provider,
+    ProviderError,
+    Reviser,
+    extract_script,
+)
 from termaai.providers.fake import FakeProvider
 from termaai.providers.openai_compat import OpenAICompatibleProvider
 
@@ -15,6 +21,7 @@ __all__ = [
     "OpenAICompatibleProvider",
     "Provider",
     "ProviderError",
+    "Reviser",
     "extract_script",
     "get_provider",
 ]

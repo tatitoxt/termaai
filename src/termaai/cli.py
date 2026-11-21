@@ -97,11 +97,19 @@ def ask(
     workspace: WorkspaceOpt = None,
     policy: PolicyOpt = None,
     provider: ProviderOpt = None,
+    revise: Annotated[
+        int,
+        typer.Option(
+            "--revise",
+            min=0,
+            help="Times to feed analyzer findings back to the provider for a safer script.",
+        ),
+    ] = 2,
 ) -> None:
     """Generate a script for PROMPT, review it, and run it after confirmation."""
     console = _console()
     assistant = _assistant(provider, console)
-    options = RunOptions(dry_run, force, sandbox, timeout, workspace, policy)
+    options = RunOptions(dry_run, force, sandbox, timeout, workspace, policy, revise)
     raise typer.Exit(assistant.ask(prompt, options))
 
 

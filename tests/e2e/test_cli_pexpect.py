@@ -93,7 +93,9 @@ def test_empty_answer_defaults_to_no(tmp_path: Path, isolated_home: Path) -> Non
 
 
 def test_high_risk_blocked_without_force(isolated_home: Path) -> None:
-    child = spawn(["ask", "install the tool", "--sandbox", "subprocess"], isolated_home)
+    child = spawn(
+        ["ask", "install the tool", "--revise", "0", "--sandbox", "subprocess"], isolated_home
+    )
     child.expect("Risk level: HIGH")
     child.expect("remote_code_execution")
     child.expect("Blocked:")

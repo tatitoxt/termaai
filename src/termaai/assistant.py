@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -27,6 +27,7 @@ from termaai.executor import (
 )
 from termaai.plan import Plan, build_plan
 from termaai.providers import Provider, ProviderError
+from termaai.providers.base import Reviser
 from termaai.safety.checks import ShellCheckResult, SyntaxResult, check_syntax, run_shellcheck
 from termaai.safety.policy import Policy, PolicyError, discover
 from termaai.safety.policy import load as load_policy
@@ -71,6 +72,8 @@ class RunOptions:
     timeout: float = 30.0
     workspace: Path | None = None
     policy_file: Path | None = None
+    # Re-generations fed with analyzer findings when a script is blocked.
+    revise: int = 2
 
 
 @dataclass
@@ -210,13 +213,94 @@ class Assistant:
 
     # ----------------------------------------------------------------- flows
     def ask(self, prompt: str, options: RunOptions) -> int:
+        workspace = self._resolve_workspace(options)
+        try:
+            policy = self._resolve_policy(options, workspace)
+        except PolicyError as exc:
+            self.console.print(f"[bold red]Policy error:[/] {escape(str(exc))}")
+            return EXIT_ERROR
+        options = replace(options, workspace=workspace)
         try:
             generation = self.provider.generate(prompt)
         except ProviderError as exc:
             self.console.print(f"[bold red]Provider error:[/] {escape(str(exc))}")
             return EXIT_ERROR
         self.console.print(f"[bold]{self.provider.name}[/]: {escape(generation.summary)}")
-        return self.run_script(generation.script, options, kind="ask", prompt=prompt)
+        script, revisions = self._revise_until_clean(
+            prompt, generation.script, workspace, policy, options
+        )
+        return self.run_script(
+            script, options, kind="ask", prompt=prompt, revisions=revisions
+        )
+
+    def _resolve_workspace(self, options: RunOptions) -> Path:
+        workspace = options.workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
+        workspace.mkdir(parents=True, exist_ok=True)
+        return workspace.resolve()
+
+    def _resolve_policy(self, options: RunOptions, workspace: Path) -> Policy:
+        if options.policy_file is not None:
+            return load_policy(options.policy_file)
+        return discover(workspace)
+
+    def _revise_until_clean(
+        self,
+        prompt: str,
+        script: str,
+        workspace: Path,
+        policy: Policy,
+        options: RunOptions,
+    ) -> tuple[str, int]:
+        """Feed analyzer problems back to the provider until the script would
+        pass the gates in run_script, or the revision budget is spent."""
+        revisions = 0
+        while revisions < max(0, options.revise):
+            review = self.review(script, workspace, policy)
+            if not self._would_block(review, options):
+                break
+            if not isinstance(self.provider, Reviser):
+                break
+            problems = self._problems(review)
+            try:
+                generation = self.provider.revise(prompt, script, problems)
+            except ProviderError as exc:
+                self.console.print(
+                    f"[yellow]Revision failed ({escape(str(exc))}); keeping the last script.[/]"
+                )
+                break
+            if generation.script == script:
+                break
+            script = generation.script
+            revisions += 1
+            self.console.print(
+                f"[cyan]Revision {revisions}[/]: {escape(generation.summary)} "
+                f"({len(problems)} problem(s) fed back)"
+            )
+        return script, revisions
+
+    @staticmethod
+    def _would_block(review: Review, options: RunOptions) -> bool:
+        if not review.syntax.ok:
+            return True
+        if review.report.level > review.policy.max_level:
+            return True
+        return review.report.level is RiskLevel.HIGH and not options.force
+
+    @staticmethod
+    def _problems(review: Review) -> list[str]:
+        problems: list[str] = []
+        if not review.syntax.ok:
+            problems.append(f"bash -n syntax error: {review.syntax.message}")
+        if review.report.level > review.policy.max_level:
+            problems.append(
+                f"risk level {review.report.level} exceeds the workspace limit "
+                f"{review.policy.max_level}"
+            )
+        problems.extend(f"{f.rule}: {f.message}" for f in review.report.findings)
+        problems.extend(
+            f"shellcheck SC{i.code}: {i.message}" for i in review.shellcheck.issues
+        )
+        return problems or ["the script was rejected; produce a safer version"]
 
     def run_script(
         self,
@@ -225,21 +309,16 @@ class Assistant:
         kind: str = "ask",
         prompt: str | None = None,
         source: str | None = None,
+        revisions: int = 0,
     ) -> int:
-        workspace = options.workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
-        workspace.mkdir(parents=True, exist_ok=True)
-        workspace = workspace.resolve()
+        workspace = self._resolve_workspace(options)
         try:
-            policy = (
-                load_policy(options.policy_file)
-                if options.policy_file is not None
-                else discover(workspace)
-            )
+            policy = self._resolve_policy(options, workspace)
         except PolicyError as exc:
             self.console.print(f"[bold red]Policy error:[/] {escape(str(exc))}")
             return EXIT_ERROR
         review = self.review(script, workspace, policy)
-        base = {"prompt": prompt, "source": source, "forced": options.force}
+        base = {"prompt": prompt, "source": source, "forced": options.force, "revisions": revisions}
         self.show_script(script, "Generated script" if kind == "ask" else "Script")
         self.show_checks(review)
         self.show_risk(review.report)

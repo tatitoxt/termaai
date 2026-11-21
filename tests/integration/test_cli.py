@@ -60,11 +60,25 @@ def test_script_exit_code_is_propagated_and_audited(tmp_path: Path) -> None:
 
 
 def test_high_risk_is_blocked_without_prompt() -> None:
-    result = invoke(["ask", "install the tool", *SUB], "y\n")
+    result = invoke(["ask", "install the tool", "--revise", "0", *SUB], "y\n")
     assert result.exit_code == EXIT_BLOCKED
     assert "remote_code_execution" in result.output
     assert "Run this script" not in result.output
     assert last_record()["decision"] == "blocked"
+
+
+def test_findings_are_fed_back_for_a_safer_script(tmp_path: Path) -> None:
+    result = invoke(
+        ["ask", "install the tool", "--workspace", str(tmp_path), *SUB], "y\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Revision 1" in result.output
+    record = last_record()
+    assert record["decision"] == "executed"
+    assert record["revisions"] == 1
+    assert record["risk_level"] == "LOW"
+    assert "skipped dangerous command" in record["script"]
+    assert "curl" not in record["script"]
 
 
 def test_force_requires_exact_second_confirmation() -> None:
@@ -104,7 +118,7 @@ def test_explain_never_executes(tmp_path: Path) -> None:
 
 def test_history_json_lists_records(tmp_path: Path) -> None:
     invoke(["ask", "create a note", "--workspace", str(tmp_path), *SUB], "n\n")
-    invoke(["ask", "install it", *SUB])
+    invoke(["ask", "install it", "--revise", "0", *SUB])
     result = invoke(["history", "--json"])
     lines = [json.loads(line) for line in result.output.splitlines()]
     assert [r["decision"] for r in lines] == ["denied", "blocked"]
@@ -119,13 +133,28 @@ def test_history_empty() -> None:
 
 def test_policy_file_blocks_above_max_level(tmp_path: Path) -> None:
     (tmp_path / ".termaai.toml").write_text('max_level = "low"\n')
-    result = invoke(["ask", "clean the build", "--workspace", str(tmp_path), *SUB], "y\n")
+    result = invoke(
+        ["ask", "clean the build", "--revise", "0", "--workspace", str(tmp_path), *SUB],
+        "y\n",
+    )
     assert result.exit_code == EXIT_BLOCKED
     assert "Blocked by policy" in result.output
     assert "Run this script" not in result.output
     record = last_record()
     assert record["decision"] == "policy_blocked"
     assert str(record["policy"]).endswith(".termaai.toml")
+
+
+def test_revision_can_satisfy_a_strict_policy(tmp_path: Path) -> None:
+    """max_level=low blocks the generated rm -rf; revision 1 drops it to LOW."""
+    (tmp_path / ".termaai.toml").write_text('max_level = "low"\n')
+    result = invoke(["ask", "clean the build", "--workspace", str(tmp_path), *SUB], "y\n")
+    assert result.exit_code == 0, result.output
+    assert "Revision 1" in result.output
+    record = last_record()
+    assert record["decision"] == "executed"
+    assert record["revisions"] == 1
+    assert "rm -rf" not in record["script"]
 
 
 def test_policy_deny_marks_command_as_high(tmp_path: Path) -> None:

@@ -30,6 +30,7 @@ deterministic, inspectable gate between the model and your machine.
 | **Docker sandbox**: `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout) |
 | **Subprocess fallback** in a temporary workspace: scrubbed env, rlimits, timeout, process-group kill | `executor.py` | integration + E2E |
 | Confirmation always required; HIGH risk blocked unless `--force` **and** typing `run high-risk` | `assistant.py` | E2E confirm / deny / force flows |
+| **Revision loop** (`--revise N`, default 2): when a script would be blocked (syntax error, HIGH risk without `--force`, or above the policy `max_level`), the findings are fed back to providers implementing the `Reviser` protocol for a safer rewrite; the audit log records how many revisions ran | `assistant.py`, `providers/base.py` | `test_cli.py` (revise → executes, satisfies a `max_level=low` policy), `test_providers.py` |
 | **Per-workspace policy files** (`.termaai.toml` or `--policy FILE`): `deny_commands` regexes add HIGH findings, `allow_commands` suppresses findings from trusted tools, `disable_rules` skips analyzer rules by name, `max_level` caps what may run — anything above is blocked unconditionally, even with `--force` | `safety/policy.py` | `tests/unit/test_policy.py`, CLI flows in `test_cli.py` |
 | JSONL **audit history** (prompt, script + SHA-256, risk level and findings, decision, sandbox, exit code), file mode `0600` | `audit.py` | unit, integration, E2E |
 
@@ -79,8 +80,12 @@ termaai ask "backup the workspace" --dry-run
 # MEDIUM risk: recursive delete inside the workspace, still asks first
 termaai ask "remove the build cache" --workspace /tmp/termaai-demo
 
-# HIGH risk: `curl | sh` is blocked outright (exit code 4)
+# HIGH risk: `curl | sh` is rejected, then the findings are fed back to the
+# provider which returns a safer rewrite (Revision 1) that runs after confirmation
 termaai ask "install the tool"
+
+# With --revise 0 the same script is blocked outright (exit code 4)
+termaai ask "install the tool" --revise 0
 
 # ...unless you pass --force AND type the phrase "run high-risk" at the second prompt
 termaai ask "install the tool" --force
@@ -184,7 +189,7 @@ it: confirm, deny, empty answer (defaults to no), HIGH-risk block, `--force` wit
 and with the correct second confirmation, timeout, dry-run, a REPL session, `explain`
 and `history`. Several of these run in both the Docker and the subprocess sandbox.
 
-Measured in this repository at the time of writing (`pytest -q`): **242 tests**
+Measured in this repository at the time of writing (`pytest -q`): **247 tests**
 (169 unit, 40 integration, 13 E2E) passing locally with Docker
 and ShellCheck available; CI runs the same suites on Python 3.10 and 3.12.
 
@@ -222,8 +227,7 @@ exactly those two IDs and fails on anything else.
 
 - Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
   tokenizer, and track `cd` for relative paths.
-- Let the user edit a generated script before running it, and feed analyzer findings back
-  to the model to request a safer version.
+- Let the user edit a generated script before running it.
 - Optional gVisor / rootless Podman backends and a curated sandbox image with common
   tools but still no network.
 - Record and replay of provider responses for regression tests on real model output.
