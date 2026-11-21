@@ -93,6 +93,20 @@ _INLINE_CODE_OPTS: dict[str, set[str]] = {
     "lua": {"-e"},
     "php": {"-r"},
 }
+# Short options that consume the rest of the argument (or the next argument)
+# as their own value, so the letters inside must not be re-scanned — e.g.
+# ``python3 -Wonce`` is ``-W`` with value ``once``, not a bundled ``-c``.
+_INLINE_VALUE_OPTS: dict[str, set[str]] = {
+    "python": {"-m", "-W", "-X"},
+    "node": {"-r"},
+    "perl": {"-m", "-M", "-I"},
+    "ruby": {"-r", "-I", "-x"},
+    "lua": {"-l"},
+    "php": {"-f", "-d", "-z"},
+}
+# Interpreters that reject ``-eCODE`` and only take code as a separate
+# argument (node: ``bad option``), so a non-empty suffix keeps scanning.
+_NO_ATTACHED_CODE = {"node"}
 _CREDENTIAL_PATHS = re.compile(
     r"(/etc/shadow|/etc/gshadow|/etc/sudoers|\.ssh/id_[A-Za-z0-9_]+|\.ssh/authorized_keys"
     r"|\.aws/credentials|\.netrc|\.git-credentials|\.docker/config\.json|\.kube/config"
@@ -282,15 +296,42 @@ def _runs_downloaded_code(cmd: SimpleCommand) -> bool:
 
 def _inline_code(cmd: SimpleCommand) -> str | None:
     """The code passed to a non-shell interpreter on its command line (``node -e CODE``)."""
-    options = _INLINE_CODE_OPTS.get(posixpath.basename(cmd.program).rstrip("0123456789."), {"-c"})
-    for idx, arg in enumerate(cmd.args):
+    prog = posixpath.basename(cmd.program).rstrip("0123456789.")
+    options = _INLINE_CODE_OPTS.get(prog, {"-c"})
+    value_opts = _INLINE_VALUE_OPTS.get(prog, set()) | options
+    idx = 0
+    while idx < len(cmd.args):
+        arg = cmd.args[idx]
         following = cmd.args[idx + 1] if idx + 1 < len(cmd.args) else None
         if arg in options:
             return following
+        if arg.startswith("--") and "=" in arg:
+            name, _, value = arg.partition("=")
+            if name in options:
+                return value
+            idx += 1
+            continue
+        if arg in value_opts:
+            idx += 2 if following is not None else 1
+            continue
         if arg.startswith("-") and not arg.startswith("--"):
             for pos, letter in enumerate(arg[1:], start=2):
                 if f"-{letter}" in options:
-                    return arg[pos:] or following
+                    rest = arg[pos:]
+                    if not rest:
+                        return following
+                    if prog not in _NO_ATTACHED_CODE:
+                        return rest
+                    # Interpreters that reject attached code values (node's
+                    # ``bad option``): a mid-cluster code letter is just a flag
+                    # (``-pe`` = -p -e) — keep scanning for the last letter.
+                    continue
+                if f"-{letter}" in value_opts:
+                    # Rest of this arg (or the next one) is that option's value.
+                    if pos >= len(arg):
+                        idx += 1
+                    break
+        idx += 1
     return None
 
 
