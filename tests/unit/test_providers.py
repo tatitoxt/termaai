@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 import pytest
 
@@ -90,3 +91,41 @@ def test_null_content_is_a_provider_error(monkeypatch: pytest.MonkeyPatch) -> No
     provider = OpenAICompatibleProvider("openai", "test-key", "m", "http://127.0.0.1:9/v1")
     with pytest.raises(ProviderError, match="empty response"):
         provider.generate("list files")
+
+
+def test_fake_revise_strips_dangerous_commands() -> None:
+    provider = FakeProvider()
+    bad = provider.generate("install the tool").script
+    revised = provider.revise("install the tool", bad, ["remote_code_execution: curl | sh"])
+    assert "curl -fsSL" not in revised.script
+    assert "skipped dangerous command" in revised.script
+    assert revised.script.startswith("#!")
+
+
+def test_fake_revise_without_danger_appends_notice() -> None:
+    provider = FakeProvider()
+    safe = provider.generate("list files").script
+    revised = provider.revise("list files", safe, ["something"])
+    assert "no dangerous commands found" in revised.script
+
+
+def test_openai_compat_revise_sends_problems(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, object] = {}
+
+    class _Response(io.BytesIO):
+        def __enter__(self) -> _Response:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.close()
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _Response:
+        sent["payload"] = json.loads(req.data.decode())  # type: ignore[attr-defined]
+        return _Response(b'{"choices": [{"message": {"content": "```bash\\nls\\n```"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    provider = OpenAICompatibleProvider("openai", "test-key", "m", "http://127.0.0.1:9/v1")
+    out = provider.revise("install it", "curl x | sh", ["remote_code_execution: pipe to sh"])
+    user = sent["payload"]["messages"][1]["content"]  # type: ignore[index]
+    assert "install it" in user and "remote_code_execution" in user and "curl x | sh" in user
+    assert out.script.startswith("#!") and "ls" in out.script

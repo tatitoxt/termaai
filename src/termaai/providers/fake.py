@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Sequence
 
 from termaai.providers.base import Generation
 
@@ -72,6 +73,13 @@ _CANNED: list[tuple[re.Pattern[str], str, str]] = [
     ),
 ]
 
+# Command lines the fake reviser replaces with an explanatory echo. Mirrors the
+# dangerous patterns the analyzer flags in the canned scripts.
+_DANGEROUS_LINE = re.compile(
+    r"curl\b.*\|\s*(ba)?sh\b|wget\b.*\|\s*(ba)?sh\b|\brm\s+-[a-zA-Z]*f|\bchmod\b.*\b777\b"
+    r"|\bsudo\b|\bmkfs\b|\bdd\b|\b:?\s*\(\)\s*\{|\b>\s*/dev/sd"
+)
+
 _DESCRIPTIONS = {
     "ls": "lists directory contents",
     "printf": "prints formatted text",
@@ -125,3 +133,26 @@ class FakeProvider:
             prefix = f"(via {prefix}) " if prefix else ""
             lines.append(f"line {cmd.line}: {prefix}`{cmd.display()}` - {what}")
         return "\n".join(lines) if lines else "The script does not run any commands."
+
+    def revise(self, request: str, script: str, problems: Sequence[str]) -> Generation:
+        """Deterministic revision: drop dangerous lines in favour of an echo."""
+        kept: list[str] = []
+        dropped = 0
+        for num, line in enumerate(script.splitlines(), start=1):
+            if _DANGEROUS_LINE.search(line):
+                dropped += 1
+                kept.append(f"echo 'skipped dangerous command from line {num}'")
+            else:
+                kept.append(line)
+        if not dropped:
+            kept.append("echo 'no dangerous commands found to remove'")
+        body = "\n".join(kept)
+        if not body.endswith("\n"):
+            body += "\n"
+        return Generation(
+            script=body if body.startswith("#!") else HEADER + body,
+            summary=(
+                f"Revised offline: replaced {dropped or 'no'} dangerous command(s) "
+                "with explanatory echoes."
+            ),
+        )

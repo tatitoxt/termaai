@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from typing import Any
 
 from termaai.providers.base import Generation, ProviderError, extract_script
@@ -21,6 +22,14 @@ GENERATE_PROMPT = (
 EXPLAIN_PROMPT = (
     "Explain what this Bash script does, step by step, in plain English. Point out "
     "anything destructive or risky. Be concise."
+)
+REVISE_PROMPT = (
+    "You write Bash scripts for a Linux shell. A previous version of the script below "
+    "was rejected by a static analyzer. Reply with one ```bash fenced block and "
+    "nothing else: a corrected script that still does what the user asked for while "
+    "fixing every listed problem. Only read and write files inside the current "
+    "directory, never use sudo, never touch system paths, and avoid network access "
+    "unless the user explicitly asked for it."
 )
 
 
@@ -80,3 +89,13 @@ class OpenAICompatibleProvider:
 
     def explain(self, script: str) -> str:
         return self._chat(EXPLAIN_PROMPT, script).strip()
+
+    def revise(self, request: str, script: str, problems: Sequence[str]) -> Generation:
+        listed = "\n".join(f"- {p}" for p in problems)
+        user = (
+            f"Request: {request}\n\n"
+            f"Rejected script:\n```bash\n{script}```\n\n"
+            f"Problems reported by the analyzer:\n{listed}"
+        )
+        reply = self._chat(REVISE_PROMPT, user)
+        return Generation(script=extract_script(reply), summary=f"Revised by {self.model}")
