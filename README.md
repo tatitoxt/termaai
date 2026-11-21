@@ -168,8 +168,11 @@ flowchart LR
 
 The analyzer does not execute anything: it tokenizes the script (quotes, pipelines,
 redirections, `$(...)` / backticks, `bash -c '...'`, heredocs, `sudo`/`env`/`xargs`
-wrappers), resolves each path argument relative to the workspace, and applies small rule
-functions to each simple command and pipeline.
+wrappers), tracks `cd`/`pushd` per command — including subshell scoping, so a `cd`
+inside `( ... )` does not leak — resolves each path argument against that command's
+effective working directory, and applies small rule functions to each simple command
+and pipeline. This means `cd /etc && rm -rf passwd` is flagged as a HIGH system-path
+delete, not a workspace file.
 
 ## Tests
 
@@ -227,7 +230,7 @@ exactly those two IDs and fails on anything else.
 ## Roadmap
 
 - Parse with a real Bash grammar (e.g. tree-sitter-bash) instead of the hand-written
-  tokenizer, and track `cd` for relative paths.
+  tokenizer.
 - Optional gVisor backend (`runsc`) and a curated sandbox image with common
   tools but still no network.
 - Record and replay of provider responses for regression tests on real model output.
