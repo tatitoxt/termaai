@@ -30,6 +30,7 @@ deterministic, inspectable gate between the model and your machine.
 | **Docker sandbox**: `--network none`, workspace bind mount, memory / CPU / PID / file-size limits, timeout, read-only rootfs, all capabilities dropped, non-root user | `executor.py` | `tests/integration/test_executor.py` (checks cgroup limits, no network, read-only rootfs, timeout) |
 | **Subprocess fallback** in a temporary workspace: scrubbed env, rlimits, timeout, process-group kill | `executor.py` | integration + E2E |
 | Confirmation always required; HIGH risk blocked unless `--force` **and** typing `run high-risk` | `assistant.py` | E2E confirm / deny / force flows |
+| **Per-workspace policy files** (`.termaai.toml` or `--policy FILE`): `deny_commands` regexes add HIGH findings, `allow_commands` suppresses findings from trusted tools, `disable_rules` skips analyzer rules by name, `max_level` caps what may run — anything above is blocked unconditionally, even with `--force` | `safety/policy.py` | `tests/unit/test_policy.py`, CLI flows in `test_cli.py` |
 | JSONL **audit history** (prompt, script + SHA-256, risk level and findings, decision, sandbox, exit code), file mode `0600` | `audit.py` | unit, integration, E2E |
 
 Finding IDs the analyzer can report (each has a corpus example in `tests/corpus/dangerous/`):
@@ -45,6 +46,7 @@ Finding IDs the analyzer can report (each has a corpus example in `tests/corpus/
 | Devices | `device_write` | `dd of=/dev/sda`, `mkfs`, `wipefs`, `shred /dev/...` |
 | Network | `network_exfiltration` (HIGH), `network_access` (MEDIUM) | `curl -T`, `curl -d @file`, `/dev/tcp`, `\| nc`, `scp` out |
 | Secrets | `credential_access` | `~/.ssh`, `~/.aws`, `/etc/shadow` |
+| Policy | `policy_deny` | a program matching `deny_commands` in `.termaai.toml` |
 | System | `system_state`, `persistence`, `history_tampering`, `package_install` | `shutdown`, `systemctl stop`, `crontab`, `history -c`, `apt-get install` |
 
 ## Quickstart
@@ -125,6 +127,11 @@ were only tested against a local HTTP stub, not against the live APIs.
 | `TERMAAI_SANDBOX_IMAGE` | Docker image for the sandbox (default `bash:5.2`) |
 | `TERMAAI_SHELLCHECK` | Path to a `shellcheck` binary, or `off` to disable |
 
+A `.termaai.toml` in the workspace (or `--policy FILE`) tightens the analyzer
+per project — deny/allow command lists, rule suppression and a hard
+`max_level` cap. A malformed policy is a hard error (fail closed); it never
+falls back to defaults. See `src/termaai/safety/policy.py` for the schema.
+
 ## Architecture
 
 ```mermaid
@@ -177,7 +184,7 @@ it: confirm, deny, empty answer (defaults to no), HIGH-risk block, `--force` wit
 and with the correct second confirmation, timeout, dry-run, a REPL session, `explain`
 and `history`. Several of these run in both the Docker and the subprocess sandbox.
 
-Measured in this repository at the time of writing (`pytest -q`): **222 tests**
+Measured in this repository at the time of writing (`pytest -q`): **242 tests**
 (169 unit, 40 integration, 13 E2E) passing locally with Docker
 and ShellCheck available; CI runs the same suites on Python 3.10 and 3.12.
 
@@ -217,7 +224,6 @@ exactly those two IDs and fails on anything else.
   tokenizer, and track `cd` for relative paths.
 - Let the user edit a generated script before running it, and feed analyzer findings back
   to the model to request a safer version.
-- Configurable policy file (allow/deny rules, per-workspace risk thresholds).
 - Optional gVisor / rootless Podman backends and a curated sandbox image with common
   tools but still no network.
 - Record and replay of provider responses for regression tests on real model output.

@@ -41,6 +41,7 @@ class AuditRecord:
     duration_s: float | None = None
     timed_out: bool = False
     workspace: str | None = None
+    policy: str | None = None
     timestamp: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
