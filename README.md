@@ -8,6 +8,10 @@ A terminal AI assistant that turns natural-language requests into Bash scripts a
 them **only after** a safety pipeline: syntax check, ShellCheck, a rule-based risk analyzer,
 an optional dry-run plan, explicit confirmation, a sandbox, and an append-only audit log.
 
+<p align="center">
+  <img src="docs/demo.svg" width="880" alt="termaai explain flagging a dangerous script: 4 HIGH findings">
+</p>
+
 ## The problem
 
 "Ask an LLM for a shell command and paste it" is fast, and occasionally catastrophic.
