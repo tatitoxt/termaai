@@ -28,7 +28,7 @@ from termaai.executor import (
 )
 from termaai.plan import Plan, build_plan
 from termaai.providers import Provider, ProviderError
-from termaai.providers.base import Reviser
+from termaai.providers.base import Reviser, Streamer
 from termaai.safety.checks import ShellCheckResult, SyntaxResult, check_syntax, run_shellcheck
 from termaai.safety.policy import Policy, PolicyError, discover
 from termaai.safety.policy import load as load_policy
@@ -86,6 +86,8 @@ class RunOptions:
     revise: int = 2
     # Open the generated script in $EDITOR before running it.
     edit: bool = False
+    # Stream the provider reply token by token when the provider supports it.
+    stream: bool = False
 
 
 @dataclass
@@ -147,6 +149,10 @@ class Assistant:
         return record
 
     # ------------------------------------------------------------- rendering
+    def _emit_token(self, token: str) -> None:
+        self.console.file.write(token)
+        self.console.file.flush()
+
     def show_script(self, script: str, title: str) -> None:
         self.console.print(
             Panel(Syntax(script, "bash", theme="ansi_dark", line_numbers=True), title=title)
@@ -233,7 +239,16 @@ class Assistant:
             return EXIT_ERROR
         options = replace(options, workspace=workspace)
         try:
-            generation = self.provider.generate(prompt)
+            if options.stream and isinstance(self.provider, Streamer):
+                generation = self.provider.generate_stream(prompt, self._emit_token)
+                self.console.file.write("\n")
+                self.console.file.flush()
+            else:
+                if options.stream:
+                    self.console.print(
+                        f"[dim]{self.provider.name} does not support streaming[/]"
+                    )
+                generation = self.provider.generate(prompt)
         except ProviderError as exc:
             self.console.print(f"[bold red]Provider error:[/] {escape(str(exc))}")
             return EXIT_ERROR

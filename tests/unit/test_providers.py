@@ -205,3 +205,40 @@ def test_provider_gives_up_after_max_retries(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(ProviderError, match="HTTP 500"):
         provider.generate("list")
     assert len(calls) == 3
+
+
+def test_provider_streams_sse_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        b'data: {"choices": [{"delta": {"content": "```bash\\n"}}]}\n\n'
+        b'data: {"choices": [{"delta": {"content": "ls -la\\n"}}]}\n'
+        b'data: {"choices": [{"delta": {"content": "```"}}]}\n'
+        b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n'
+        b'data: [DONE]\n'
+    )
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:
+        return _StubResponse(body)
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x")
+    tokens: list[str] = []
+    gen = provider.generate_stream("list", tokens.append)
+    assert tokens == ["```bash\n", "ls -la\n", "```"]
+    assert "ls -la" in gen.script
+
+
+def test_provider_stream_retries_opening_errors_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    body = b'data: {"choices": [{"delta": {"content": "```bash\\nls\\n```"}}]}\ndata: [DONE]\n'
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:
+        calls.append(1)
+        if len(calls) == 1:
+            raise _http_error(429, retry_after="0")
+        return _StubResponse(body)
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x", sleep=lambda s: None)
+    tokens: list[str] = []
+    provider.generate_stream("list", tokens.append)
+    assert len(calls) == 2 and tokens

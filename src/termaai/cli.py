@@ -115,11 +115,16 @@ def ask(
             "--edit", "-e", help="Open the generated script in $EDITOR before running it."
         ),
     ] = False,
+    stream: Annotated[
+        bool, typer.Option("--stream", help="Stream the provider reply token by token.")
+    ] = False,
 ) -> None:
     """Generate a script for PROMPT, review it, and run it after confirmation."""
     console = _console()
     assistant = _assistant(provider, console)
-    options = RunOptions(dry_run, force, sandbox, timeout, workspace, policy, revise, edit)
+    options = RunOptions(
+        dry_run, force, sandbox, timeout, workspace, policy, revise, edit, stream=stream
+    )
     raise typer.Exit(assistant.ask(prompt, options))
 
 

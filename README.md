@@ -36,6 +36,7 @@ deterministic, inspectable gate between the model and your machine.
 | **Subprocess fallback** in a temporary workspace: scrubbed env, rlimits, timeout, process-group kill | `executor.py` | integration + E2E |
 | Confirmation always required; HIGH risk blocked unless `--force` **and** typing `run high-risk` | `assistant.py` | E2E confirm / deny / force flows |
 | **Edit before run** (`--edit` / `-e`): the generated script opens in `$EDITOR`; an accepted edit is re-checked, re-analyzed and re-shown before the confirmation, and `edited: true` is recorded in the audit log. An aborted or emptied edit runs nothing | `assistant.py` | `test_cli.py` (edit → executes, fixes a HIGH script, abort/empty → denied) |
+| **Streaming** (`--stream`): the model reply prints token by token over SSE while it is generated; providers without streaming fall back with a note, and replayed fixtures emit the recorded script as one token | `providers/openai_compat.py`, `providers/base.py` (`Streamer`) | `test_providers.py` (SSE parsing, open-error retry), `test_replay_provider.py` |
 | **Revision loop** (`--revise N`, default 2): when a script would be blocked (syntax error, HIGH risk without `--force`, or above the policy `max_level`), the findings are fed back to providers implementing the `Reviser` protocol for a safer rewrite; the audit log records how many revisions ran | `assistant.py`, `providers/base.py` | `test_cli.py` (revise → executes, satisfies a `max_level=low` policy), `test_providers.py` |
 | **Per-workspace policy files** (`.termaai.toml` or `--policy FILE`): `deny_commands` regexes add HIGH findings, `allow_commands` suppresses findings from trusted tools, `disable_rules` skips analyzer rules by name, `max_level` caps what may run — anything above is blocked unconditionally, even with `--force` | `safety/policy.py` | `tests/unit/test_policy.py`, CLI flows in `test_cli.py` |
 | JSONL **audit history** (prompt, script + SHA-256, risk level and findings, decision, sandbox, exit code), file mode `0600`, with size-based rotation (`TERMAAI_AUDIT_MAX_BYTES` / `TERMAAI_AUDIT_KEEP`) and `termaai history --archived --risk --decision` filters | `audit.py` | unit, integration, E2E |
@@ -236,7 +237,8 @@ exactly those two IDs and fails on anything else.
   hand-written tokenizer on inputs the grammar rejects; the two backends agree on the
   emitted command list, but only for the constructs covered by the test corpus.
 - The fake provider only knows a handful of phrases. The OpenAI/Groq clients were tested
-  against a local HTTP stub, not live APIs, and have no streaming.
+  against a local HTTP stub, not live APIs. `--stream` prints tokens as they
+  arrive (providers implementing the `Streamer` protocol); mid-stream failures fail fast.
 - Developed and tested on Linux only (rlimits, process groups, Docker). macOS and
   Windows are untested.
 - No authentication or multi-user setup for the audit file. Rotated segments are plain JSONL (not compressed); defaults keep ~60 MiB of history.
