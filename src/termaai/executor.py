@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import resource
 import shutil
@@ -302,6 +303,27 @@ def docker_available(docker: str = "docker") -> bool:
     return proc.returncode == 0
 
 
+def docker_has_runtime(runtime: str, docker: str = "docker") -> bool:
+    """Whether the (possibly remote) daemon has ``runtime`` registered."""
+    try:
+        proc = subprocess.run(
+            [docker, "info", "--format", "{{json .Runtimes}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if proc.returncode != 0:
+        return False
+    try:
+        runtimes = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return isinstance(runtimes, dict) and runtime in runtimes
+
+
 def select_executor(mode: str = "auto") -> Executor:
     """Pick a backend: ``docker``, ``podman``, ``subprocess`` or ``auto``.
 
@@ -318,10 +340,11 @@ def select_executor(mode: str = "auto") -> Executor:
             raise SandboxError("Podman sandbox requested but podman is not installed")
         return PodmanExecutor()
     if mode == "gvisor":
-        if shutil.which("runsc") is None:
-            raise SandboxError("gVisor sandbox requested but runsc is not installed")
+        # runsc runs inside the daemon, which may be remote — ask it, not local PATH
         if not docker_available():
             raise SandboxError("gVisor sandbox requested but the Docker daemon is not reachable")
+        if not docker_has_runtime("runsc"):
+            raise SandboxError("gVisor sandbox requested but runsc is not installed")
         return GVisorExecutor()
     if mode != "auto":
         raise SandboxError(f"unknown sandbox mode {mode!r}")
