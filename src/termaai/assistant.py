@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -40,6 +41,8 @@ EXIT_BLOCKED = 4
 EXIT_ERROR = 5
 FORCE_PHRASE = "run high-risk"
 LEVEL_STYLE = {RiskLevel.LOW: "green", RiskLevel.MEDIUM: "yellow", RiskLevel.HIGH: "bold red"}
+# C0/C1 control characters except tab and newline, including ESC and CR
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 class Prompter(Protocol):
@@ -150,7 +153,9 @@ class Assistant:
 
     # ------------------------------------------------------------- rendering
     def _emit_token(self, token: str) -> None:
-        self.console.file.write(token)
+        # model output must not drive the terminal (OSC 52 clipboard writes,
+        # cursor movement that hides text before the confirmation prompt)
+        self.console.file.write(_CONTROL_CHARS.sub("", token))
         self.console.file.flush()
 
     def show_script(self, script: str, title: str) -> None:
