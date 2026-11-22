@@ -236,7 +236,7 @@ exactly those two IDs and fails on anything else.
   hand-written tokenizer on inputs the grammar rejects; the two backends agree on the
   emitted command list, but only for the constructs covered by the test corpus.
 - The fake provider only knows a handful of phrases. The OpenAI/Groq clients were tested
-  against a local HTTP stub, not live APIs, and have no streaming or retries.
+  against a local HTTP stub, not live APIs, and have no streaming.
 - Developed and tested on Linux only (rlimits, process groups, Docker). macOS and
   Windows are untested.
 - No authentication, multi-user setup or log rotation for the audit file.
