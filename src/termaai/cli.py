@@ -203,9 +203,23 @@ def _print_history(console: Console, entries: list[dict[str, object]]) -> None:
 def history(
     limit: Annotated[int, typer.Option("--limit", "-n", min=1, help="Entries to show.")] = 20,
     as_json: Annotated[bool, typer.Option("--json", help="Print raw JSONL records.")] = False,
+    archived: Annotated[
+        bool, typer.Option("--archived", help="Include rotated history.N.jsonl segments.")
+    ] = False,
+    risk: Annotated[
+        str | None, typer.Option("--risk", help="Only entries with this risk level.")
+    ] = None,
+    decision: Annotated[
+        str | None, typer.Option("--decision", help="Only entries with this decision.")
+    ] = None,
 ) -> None:
     """Show the audit history of prompts, scripts, risk decisions and exit codes."""
-    entries = AuditLog().read(limit=limit)
+    entries = AuditLog().read(archived=archived)
+    if risk:
+        entries = [e for e in entries if str(e.get("risk_level", "")).lower() == risk.lower()]
+    if decision:
+        entries = [e for e in entries if str(e.get("decision", "")).lower() == decision.lower()]
+    entries = entries[-limit:]
     if as_json:
         for entry in entries:
             typer.echo(json.dumps(entry, sort_keys=True))

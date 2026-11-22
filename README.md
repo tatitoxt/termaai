@@ -38,7 +38,7 @@ deterministic, inspectable gate between the model and your machine.
 | **Edit before run** (`--edit` / `-e`): the generated script opens in `$EDITOR`; an accepted edit is re-checked, re-analyzed and re-shown before the confirmation, and `edited: true` is recorded in the audit log. An aborted or emptied edit runs nothing | `assistant.py` | `test_cli.py` (edit → executes, fixes a HIGH script, abort/empty → denied) |
 | **Revision loop** (`--revise N`, default 2): when a script would be blocked (syntax error, HIGH risk without `--force`, or above the policy `max_level`), the findings are fed back to providers implementing the `Reviser` protocol for a safer rewrite; the audit log records how many revisions ran | `assistant.py`, `providers/base.py` | `test_cli.py` (revise → executes, satisfies a `max_level=low` policy), `test_providers.py` |
 | **Per-workspace policy files** (`.termaai.toml` or `--policy FILE`): `deny_commands` regexes add HIGH findings, `allow_commands` suppresses findings from trusted tools, `disable_rules` skips analyzer rules by name, `max_level` caps what may run — anything above is blocked unconditionally, even with `--force` | `safety/policy.py` | `tests/unit/test_policy.py`, CLI flows in `test_cli.py` |
-| JSONL **audit history** (prompt, script + SHA-256, risk level and findings, decision, sandbox, exit code), file mode `0600` | `audit.py` | unit, integration, E2E |
+| JSONL **audit history** (prompt, script + SHA-256, risk level and findings, decision, sandbox, exit code), file mode `0600`, with size-based rotation (`TERMAAI_AUDIT_MAX_BYTES` / `TERMAAI_AUDIT_KEEP`) and `termaai history --archived --risk --decision` filters | `audit.py` | unit, integration, E2E |
 
 Finding IDs the analyzer can report (each has a corpus example in `tests/corpus/dangerous/`):
 
@@ -239,7 +239,7 @@ exactly those two IDs and fails on anything else.
   against a local HTTP stub, not live APIs, and have no streaming.
 - Developed and tested on Linux only (rlimits, process groups, Docker). macOS and
   Windows are untested.
-- No authentication, multi-user setup or log rotation for the audit file.
+- No authentication or multi-user setup for the audit file. Rotated segments are plain JSONL (not compressed); defaults keep ~60 MiB of history.
 
 ## License
 

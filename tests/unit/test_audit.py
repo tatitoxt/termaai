@@ -34,3 +34,53 @@ def test_history_path_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     monkeypatch.delenv("TERMAAI_HOME")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     assert history_path() == tmp_path / "xdg" / "termaai" / "history.jsonl"
+
+
+def test_rotation_on_size_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TERMAAI_AUDIT_MAX_BYTES", "200")
+    monkeypatch.setenv("TERMAAI_AUDIT_KEEP", "2")
+    log = AuditLog(tmp_path / "history.jsonl")
+
+    for i in range(30):
+        log.append(
+            AuditRecord(
+                kind="ask", decision="executed", risk_level="LOW", script=f"echo {i} " + "x" * 40
+            )
+        )
+
+    live = tmp_path / "history.jsonl"
+    seg1 = tmp_path / "history.1.jsonl"
+    assert live.exists() and seg1.exists()
+    # Only `keep` segments may exist.
+    assert not (tmp_path / "history.3.jsonl").exists()
+    # Entries beyond keep are dropped; the newest ones always survive, ordered.
+    all_entries = log.read(archived=True)
+    assert 0 < len(all_entries) < 30
+    last_script = all_entries[-1]["script"]
+    assert last_script.startswith("echo 29")
+    # Live file only has post-rotation entries.
+    live_entries = log.read()
+    assert 0 < len(live_entries) < len(all_entries)
+
+
+def test_rotation_disabled_when_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TERMAAI_AUDIT_MAX_BYTES", "0")
+    log = AuditLog(tmp_path / "history.jsonl")
+    for i in range(5):
+        log.append(AuditRecord(kind="ask", decision="executed", risk_level="LOW", script=str(i)))
+    assert not (tmp_path / "history.1.jsonl").exists()
+    assert len(log.read()) == 5
+
+
+def test_read_archived_oldest_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TERMAAI_AUDIT_MAX_BYTES", "150")
+    monkeypatch.setenv("TERMAAI_AUDIT_KEEP", "10")
+    log = AuditLog(tmp_path / "history.jsonl")
+    for i in range(10):
+        log.append(
+            AuditRecord(
+                kind="ask", decision="executed", risk_level="LOW", script=f"cmd{i} " + "y" * 30
+            )
+        )
+    archived = log.read(archived=True)
+    assert [e["script"][:4] for e in archived] == [f"cmd{i}" for i in range(10)]

@@ -58,21 +58,52 @@ class AuditRecord:
         return json.dumps(data, sort_keys=True)
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
 class AuditLog:
+    """Append-only JSONL audit log with size-based segment rotation.
+
+    When the live file grows past ``TERMAAI_AUDIT_MAX_BYTES`` (default 10 MiB,
+    ``0`` disables rotation) it is renamed to ``<name>.1.jsonl`` and a fresh
+    file starts; up to ``TERMAAI_AUDIT_KEEP`` (default 5) numbered segments are
+    kept, oldest dropped.
+    """
+
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or history_path()
 
+    def _segment(self, n: int) -> Path:
+        return self.path.with_name(f"{self.path.stem}.{n}{self.path.suffix}")
+
+    def _rotate(self) -> None:
+        max_bytes = _env_int("TERMAAI_AUDIT_MAX_BYTES", 10 * 1024 * 1024)
+        if max_bytes <= 0 or not self.path.exists() or self.path.stat().st_size <= max_bytes:
+            return
+        keep = max(1, _env_int("TERMAAI_AUDIT_KEEP", 5))
+        oldest = self._segment(keep)
+        if oldest.exists():
+            oldest.unlink()
+        for n in range(keep - 1, 0, -1):
+            seg = self._segment(n)
+            if seg.exists():
+                seg.replace(self._segment(n + 1))
+        self.path.replace(self._segment(1))
+
     def append(self, record: AuditRecord) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._rotate()
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(record.to_json() + "\n")
 
-    def read(self, limit: int | None = None) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
+    def _read_file(self, path: Path) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
-        with self.path.open(encoding="utf-8") as fh:
+        with path.open(encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -81,4 +112,17 @@ class AuditLog:
                     entries.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
+        return entries
+
+    def read(self, limit: int | None = None, archived: bool = False) -> list[dict[str, Any]]:
+        """Live entries, oldest first. With ``archived`` the rotated segments are
+        included (oldest segment first, live file last)."""
+        entries: list[dict[str, Any]] = []
+        if archived:
+            for n in range(_env_int("TERMAAI_AUDIT_KEEP", 5), 0, -1):
+                seg = self._segment(n)
+                if seg.exists():
+                    entries.extend(self._read_file(seg))
+        if self.path.exists():
+            entries.extend(self._read_file(self.path))
         return entries[-limit:] if limit else entries
