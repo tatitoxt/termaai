@@ -488,8 +488,8 @@ def network_exfiltration(parsed: ParsedScript, workspace: str) -> Iterable[Findi
                     cmd,
                     f"uploads local data over the network ({hit})",
                 )
-        if cmd.program in {"nc", "ncat", "netcat", "socat", "telnet"} and any(
-            r.op == "<" for r in cmd.redirects
+        if cmd.program in {"nc", "ncat", "netcat", "socat", "telnet"} and (
+            cmd.stdin_redirected or any(r.op == "<" for r in cmd.redirects)
         ):
             yield _finding(
                 "network_exfiltration", RiskLevel.HIGH, cmd, f"sends a file through {cmd.program}"
