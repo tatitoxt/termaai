@@ -21,8 +21,8 @@ dependencies = [
     "click==8.1.7",
     "rich==13.9.4",
     "tomli==2.0.1; python_version < '3.11'",
-    "tree-sitter>=0.25",
-    "tree-sitter-bash>=0.25",
+    "tree-sitter==0.25.2",
+    "tree-sitter-bash==0.25.1",
 ]
 
 [project.scripts]
