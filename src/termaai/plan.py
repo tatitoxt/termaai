@@ -75,7 +75,7 @@ class Plan:
         seen: dict[tuple[str, str], Touch] = {}
         for step in self.steps:
             for t in step.touches:
-                seen.setdefault((t.path, t.action), t)
+                seen.setdefault((t.resolved, t.action), t)
         return list(seen.values())
 
 

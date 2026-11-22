@@ -42,3 +42,9 @@ def test_plan_reads_inputs_for_option_forms() -> None:
     plan = build_plan("grep -i todo notes.txt\ngrep -e x log.txt\ncp -t out a.txt b.txt", "/ws")
     reads = {t.path for t in plan.touches if t.action == "read"}
     assert {"notes.txt", "log.txt", "a.txt", "b.txt"} <= reads
+
+
+def test_same_relative_write_in_two_directories_lists_both() -> None:
+    plan = build_plan("touch note\ncd /etc\ntouch note\n", "/ws")
+    writes = sorted(t.resolved for t in plan.touches if t.action == "write")
+    assert writes == ["/etc/note", "/ws/note"]
