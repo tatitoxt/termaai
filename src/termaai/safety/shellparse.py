@@ -379,12 +379,24 @@ def parse(source: str) -> ParsedScript:
 
 _DEPTH_NODES = frozenset({"subshell", "command_substitution", "process_substitution"})
 _COMMAND_NODES = frozenset({"command", "declaration_command", "unset_command", "test_command"})
-_CONTAINER_NODES = frozenset({
-    "program", "list", "if_statement", "elif_clause", "else_clause",
-    "while_statement", "for_statement", "c_style_for_statement", "do_group",
-    "case_statement", "case_item", "function_definition", "compound_statement",
-    "negated_command",
-})
+_CONTAINER_NODES = frozenset(
+    {
+        "program",
+        "list",
+        "if_statement",
+        "elif_clause",
+        "else_clause",
+        "while_statement",
+        "for_statement",
+        "c_style_for_statement",
+        "do_group",
+        "case_statement",
+        "case_item",
+        "function_definition",
+        "compound_statement",
+        "negated_command",
+    }
+)
 
 
 def _has_error(node: Any) -> bool:
@@ -432,8 +444,11 @@ def _walk(
             if child.is_named and child.type not in ("file_redirect", "heredoc_redirect"):
                 _walk(child, source, out, depth, pipes)
         redirects = tuple(
-            rt for c in node.children if c.type in ("file_redirect", "heredoc_redirect")
-            for rt in [_redirect_text(source, c)] if rt
+            rt
+            for c in node.children
+            if c.type in ("file_redirect", "heredoc_redirect")
+            for rt in [_redirect_text(source, c)]
+            if rt
         )
         # attach to the last command emitted at this depth — nested substitution
         # commands emitted after the parent must not receive its redirect
@@ -441,8 +456,11 @@ def _walk(
             for i in range(len(out) - 1, start - 1, -1):
                 if out[i].paren_depth == depth:
                     last = out[i]
-                    out[i] = replace(last, redirects=last.redirects + tuple(
-                        Redirect(op=o, target=t) for o, t in redirects))
+                    out[i] = replace(
+                        last,
+                        redirects=last.redirects
+                        + tuple(Redirect(op=o, target=t) for o, t in redirects),
+                    )
                     break
         if start == len(out):
             for child in node.children:
@@ -473,15 +491,14 @@ def _word_text(node: Any, source: bytes) -> str:
         text = source[node.start_byte : node.end_byte].decode("utf-8", "replace")
         return text[text.index("'") + 1 : -1] if "'" in text else text
     if t == "string":
-        inner = "".join(
-            _word_text(c, source) for c in node.children if c.is_named
+        inner = "".join(_word_text(c, source) for c in node.children if c.is_named)
+        return (
+            inner
+            if inner
+            else source[node.start_byte : node.end_byte].decode("utf-8", "replace").strip('"')
         )
-        return inner if inner else source[node.start_byte : node.end_byte].decode(
-            "utf-8", "replace").strip('"')
     if t == "concatenation":
-        return "".join(
-            _word_text(c, source) for c in node.children if c.is_named
-        )
+        return "".join(_word_text(c, source) for c in node.children if c.is_named)
     return source[node.start_byte : node.end_byte].decode("utf-8", "replace")
 
 
@@ -490,9 +507,15 @@ def _command_words(node: Any, source: bytes) -> list[str]:
     return [
         _word_text(c, source)
         for c in node.children
-        if c.is_named and c.type not in (
-            "variable_assignment", "file_redirect", "heredoc_redirect",
-            "command_substitution", "process_substitution")
+        if c.is_named
+        and c.type
+        not in (
+            "variable_assignment",
+            "file_redirect",
+            "heredoc_redirect",
+            "command_substitution",
+            "process_substitution",
+        )
     ]
 
 
@@ -520,7 +543,8 @@ def _grammar_command(node: Any, source: bytes, depth: int, pipes: Iterator[int])
         op = "[[" if text.startswith("[[") else "["
         inner = [
             source[g.start_byte : g.end_byte].decode("utf-8", "replace")
-            for c in node.children if c.is_named
+            for c in node.children
+            if c.is_named
             for g in (c.children if c.type in ("unary_expression", "binary_expression") else (c,))
             if g.is_named
         ]

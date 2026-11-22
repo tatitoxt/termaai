@@ -245,9 +245,7 @@ class Assistant:
                 self.console.file.flush()
             else:
                 if options.stream:
-                    self.console.print(
-                        f"[dim]{self.provider.name} does not support streaming[/]"
-                    )
+                    self.console.print(f"[dim]{self.provider.name} does not support streaming[/]")
                 generation = self.provider.generate(prompt)
         except ProviderError as exc:
             self.console.print(f"[bold red]Provider error:[/] {escape(str(exc))}")
@@ -256,9 +254,7 @@ class Assistant:
         script, revisions = self._revise_until_clean(
             prompt, generation.script, workspace, policy, options
         )
-        return self.run_script(
-            script, options, kind="ask", prompt=prompt, revisions=revisions
-        )
+        return self.run_script(script, options, kind="ask", prompt=prompt, revisions=revisions)
 
     def _resolve_workspace(self, options: RunOptions) -> Path:
         workspace = options.workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
@@ -324,9 +320,7 @@ class Assistant:
                 f"{review.policy.max_level}"
             )
         problems.extend(f"{f.rule}: {f.message}" for f in review.report.findings)
-        problems.extend(
-            f"shellcheck SC{i.code}: {i.message}" for i in review.shellcheck.issues
-        )
+        problems.extend(f"shellcheck SC{i.code}: {i.message}" for i in review.shellcheck.issues)
         return problems or ["the script was rejected; produce a safer version"]
 
     def run_script(

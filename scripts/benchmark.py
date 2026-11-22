@@ -33,7 +33,7 @@ SCRIPTS = [
     "chmod -R 777 /etc",
     # tricky / multi-line
     "cat <<'EOF' > /etc/hosts\n127.0.0.1 localhost\nEOF",
-    "for f in *.log; do mv \"$f\" \"$f.bak\"; done",
+    'for f in *.log; do mv "$f" "$f.bak"; done',
     "python -c \"import shutil; shutil.rmtree('/')\"",
     "nohup python serve.py > /tmp/out.log 2>&1 &",
 ]
@@ -75,9 +75,11 @@ def main() -> int:
     if args.json:
         print(json.dumps(out, indent=2))
     else:
-        print(f"safety pipeline: {out['analyses_per_sec']:.0f} analyses/sec "
-              f"over {ops} scripts (p50 {out['latency_ms']['p50']} ms, "
-              f"p99 {out['latency_ms']['p99']} ms), {findings} findings")
+        print(
+            f"safety pipeline: {out['analyses_per_sec']:.0f} analyses/sec "
+            f"over {ops} scripts (p50 {out['latency_ms']['p50']} ms, "
+            f"p99 {out['latency_ms']['p99']} ms), {findings} findings"
+        )
     return 0
 
 

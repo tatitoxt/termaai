@@ -166,7 +166,8 @@ def test_grammar_backend_matches_hand_parser_on_corpus() -> None:
         # grammar backend, while the hand tokenizer emits phantom fragments —
         # program lists agree everywhere else.
         assert sorted(c.program for c in grammar.commands) == sorted(
-            c.program for c in hand.commands), src
+            c.program for c in hand.commands
+        ), src
 
 
 def test_parse_falls_back_to_hand_parser_on_syntax_error() -> None:
