@@ -205,8 +205,8 @@ it: confirm, deny, empty answer (defaults to no), HIGH-risk block, `--force` wit
 and with the correct second confirmation, timeout, dry-run, a REPL session, `explain`
 and `history`. Several of these run in both the Docker and the subprocess sandbox.
 
-Measured in this repository at the time of writing (`pytest -q`): **251 tests**
-(169 unit, 40 integration, 13 E2E) passing locally with Docker
+Measured in this repository at the time of writing (`pytest -q`): **279 tests**
+(212 unit, 54 integration, 13 E2E) passing locally with Docker
 and ShellCheck available; CI runs the same suites on Python 3.10 and 3.12.
 
 ### Dependency audit
@@ -239,6 +239,10 @@ exactly those two IDs and fails on anything else.
 - The fake provider only knows a handful of phrases. The OpenAI/Groq clients were tested
   against a local HTTP stub, not live APIs. `--stream` prints tokens as they
   arrive (providers implementing the `Streamer` protocol); mid-stream failures fail fast.
+- The rootless Podman and gVisor (`runsc`) backends are covered by tests of executor
+  selection and the generated container command line only; CI does not run scripts
+  under a real Podman or gVisor runtime, and the curated `sandbox/Dockerfile` image is
+  not built in CI.
 - Developed and tested on Linux only (rlimits, process groups, Docker). macOS and
   Windows are untested.
 - No authentication or multi-user setup for the audit file. Rotated segments are plain JSONL (not compressed); defaults keep ~60 MiB of history.
@@ -249,4 +253,4 @@ exactly those two IDs and fails on anything else.
 
 ## Benchmarks
 
-`scripts/benchmark.py` measures the safety pipeline: **11.5k analyses/sec**, 0.08 ms p50 per script — the risk-review gate adds effectively zero latency before a generated command runs. See [docs/benchmarks.md](docs/benchmarks.md).
+`scripts/benchmark.py` measures the safety pipeline (parse + all risk rules) over a 16-script corpus. On the 8-vCPU Linux VM used for development it ran 3.4k–5.0k analyses/sec with a 0.09 ms p50 per script across three runs; numbers are machine-dependent. See [docs/benchmarks.md](docs/benchmarks.md).

@@ -12,19 +12,22 @@ needed.
 python scripts/benchmark.py --rounds 500   # --json for raw output
 ```
 
-**Results (2026-11-21, 8,000 analyses over a 16-script corpus)**
+**Results (2026-11-22, 8-vCPU Intel Xeon Linux VM, Python 3.10, 8,000 analyses over a 16-script corpus, three runs)**
 
 | Metric | Value |
 |---|---:|
-| Safety analyses/sec | **11,527** |
-| Per-script latency | 0.08 ms p50 / 0.134 ms p99 |
-| Findings raised | 6,500 |
+| Safety analyses/sec | 3,397 – 5,045 |
+| Per-script latency p50 | 0.091 ms |
+| Per-script latency p99 | 0.31 – 5.6 ms (noisy on a shared VM) |
+| Findings raised per run | 6,000 |
 
 **Reading the numbers**
 
-- Sub-millisecond analysis means the safety gate adds effectively zero
-  latency to the generate → review → confirm flow — risk review is not the
-  bottleneck, the provider call is.
+- Analysis is far below the latency of a provider call, so the safety gate is not the
+  bottleneck of the generate → review → confirm flow.
 - The corpus mixes benign, dangerous and obfuscated scripts; findings come
   from the dangerous and tricky cases.
-- Machine-dependent numbers; a reproducible baseline, not a marketing figure.
+- Machine-dependent numbers measured on one development VM; rerun the command above
+  to get figures for your hardware.
+- An earlier revision allocated a large list for every pipeline, which cost ~18 ms per
+  script containing `|`; the figures above were measured after that fix.
