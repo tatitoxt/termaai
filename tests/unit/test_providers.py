@@ -242,3 +242,36 @@ def test_provider_stream_retries_opening_errors_only(monkeypatch: pytest.MonkeyP
     tokens: list[str] = []
     provider.generate_stream("list", tokens.append)
     assert len(calls) == 2 and tokens
+
+
+def test_provider_stream_without_done_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = b'data: {"choices": [{"delta": {"content": "```bash\\nrm -rf build"}}]}\n'
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, **kw: _StubResponse(body))
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x")
+    with pytest.raises(ProviderError, match=r"before \[DONE\]"):
+        provider.generate_stream("list", lambda t: None)
+
+
+class _TimingOutResponse(_StubResponse):
+    def __iter__(self):  # type: ignore[override]
+        yield b'data: {"choices": [{"delta": {"content": "ls"}}]}\n'
+        raise TimeoutError("timed out")
+
+
+def test_provider_stream_read_timeout_is_a_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, **kw: _TimingOutResponse(b""))
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x")
+    with pytest.raises(ProviderError, match="stream interrupted"):
+        provider.generate_stream("list", lambda t: None)
+
+
+def test_retry_after_http_date_is_a_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    import email.utils
+
+    now = 1_800_000_000.0
+    monkeypatch.setattr("termaai.providers.openai_compat.time.time", lambda: now)
+    header = email.utils.formatdate(now + 10, usegmt=True)
+    delay = OpenAICompatibleProvider._retry_delay(_http_error(429, retry_after=header), 0)
+    assert delay == pytest.approx(10.0, abs=1.0)
