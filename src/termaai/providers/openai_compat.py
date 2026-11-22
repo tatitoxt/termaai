@@ -5,6 +5,8 @@ Uses only the standard library so no SDK is required. Opt-in via environment var
 
 from __future__ import annotations
 
+import email.utils
+import http.client
 import json
 import time
 import urllib.error
@@ -32,6 +34,19 @@ REVISE_PROMPT = (
     "directory, never use sudo, never touch system paths, and avoid network access "
     "unless the user explicitly asked for it."
 )
+
+
+def _parse_retry_after(value: str) -> float | None:
+    """Seconds from a Retry-After header: delta-seconds or an HTTP-date."""
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return max(when.timestamp() - time.time(), 0.0)
 
 
 class OpenAICompatibleProvider:
@@ -84,10 +99,9 @@ class OpenAICompatibleProvider:
             if exc.code == 429 or exc.code >= 500:
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 if retry_after:
-                    try:
-                        return min(float(retry_after), 30.0)
-                    except ValueError:
-                        pass
+                    delay = _parse_retry_after(retry_after)
+                    if delay is not None:
+                        return min(delay, 30.0)
                 return min(2.0**attempt, 16.0)
             return None
         if isinstance(exc, urllib.error.URLError | TimeoutError):
@@ -175,22 +189,29 @@ class OpenAICompatibleProvider:
             raise ProviderError(f"{self.name}: request failed ({last})") from last
         with resp:
             # Once streaming starts, failures fail fast — a partial reply is not retried.
-            for raw in resp:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    return
-                try:
-                    event = json.loads(data)
-                    delta = event["choices"][0].get("delta", {}).get("content")
-                except (KeyError, IndexError, TypeError) as exc:
-                    raise ProviderError(f"{self.name}: unexpected stream event") from exc
-                except json.JSONDecodeError as exc:
-                    raise ProviderError(f"{self.name}: malformed stream event") from exc
-                if isinstance(delta, str) and delta:
-                    yield delta
+            try:
+                yield from self._sse_deltas(resp)
+            except (OSError, http.client.HTTPException) as exc:
+                raise ProviderError(f"{self.name}: stream interrupted ({exc})") from exc
+
+    def _sse_deltas(self, resp: Any) -> Iterator[str]:
+        for raw in resp:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                return
+            try:
+                event = json.loads(data)
+                delta = event["choices"][0].get("delta", {}).get("content")
+            except (KeyError, IndexError, TypeError) as exc:
+                raise ProviderError(f"{self.name}: unexpected stream event") from exc
+            except json.JSONDecodeError as exc:
+                raise ProviderError(f"{self.name}: malformed stream event") from exc
+            if isinstance(delta, str) and delta:
+                yield delta
+        raise ProviderError(f"{self.name}: stream ended before [DONE]")
 
     def generate(self, request: str) -> Generation:
         reply = self._chat(GENERATE_PROMPT, request)
