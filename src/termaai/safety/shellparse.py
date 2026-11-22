@@ -90,6 +90,9 @@ class SimpleCommand:
     assignments: tuple[str, ...] = ()
     paren_depth: int = 0
     cwd: str = ""
+    # identifies the subshell/substitution instance at ``paren_depth``, so
+    # sibling substitutions do not share a working directory
+    scope: int = field(default=0, compare=False)
 
     @property
     def program(self) -> str:
@@ -463,34 +466,42 @@ def _walk(
         return
     if t == "redirected_statement":
         start = len(out)
-        for child in node.children:
-            if child.is_named and child.type not in ("file_redirect", "heredoc_redirect"):
-                _walk(child, source, out, depth, pipes)
+        body = [
+            c
+            for c in node.children
+            if c.is_named and c.type not in ("file_redirect", "heredoc_redirect")
+        ]
+        for child in body:
+            _walk(child, source, out, depth, pipes)
         redirect_nodes = [
             c for c in node.children if c.type in ("file_redirect", "heredoc_redirect")
         ]
         redirects = tuple(
             Redirect(op=o, target=t) for c in redirect_nodes for o, t in _redirects_of(source, c)
         )
-        # attach to the last command emitted at this depth — nested substitution
-        # commands emitted after the parent must not receive its redirect. A
-        # redirected subshell/group falls back to its last inner command, and a
-        # bare `> file` becomes a no-op command so the write is still analyzed.
+        # A simple command (or a pipeline's last stage) owns its redirects:
+        # attach to the last command emitted at this depth (nested substitution
+        # commands emitted after the parent must not receive them). Bash opens
+        # the redirects of a subshell, group, loop or bare `> file` before the
+        # body runs, in the outer directory, so they go on a no-op `:` placed
+        # before the body.
         if redirects:
-            emitted = range(len(out) - 1, start - 1, -1)
-            target = next((i for i in emitted if out[i].paren_depth == depth), None)
+            simple = len(body) == 1 and (
+                body[0].type in _COMMAND_NODES or body[0].type == "pipeline"
+            )
+            target = None
+            if simple:
+                emitted = range(len(out) - 1, start - 1, -1)
+                target = next((i for i in emitted if out[i].paren_depth == depth), None)
             if target is None:
-                target = next(iter(emitted), None)
-            if target is None:
-                out.append(
-                    SimpleCommand(
-                        line=node.start_point[0] + 1,
-                        argv=(":",),
-                        pipeline=next(pipes),
-                        paren_depth=depth,
-                    )
+                no_op = SimpleCommand(
+                    line=node.start_point[0] + 1,
+                    argv=(":",),
+                    pipeline=next(_SUB_IDS),
+                    paren_depth=depth,
                 )
-                target = len(out) - 1
+                out.insert(start, no_op)
+                target = start
             out[target] = replace(out[target], redirects=out[target].redirects + redirects)
         for c in redirect_nodes:
             _walk_subs(c, source, out, depth, _SUB_IDS)
@@ -502,9 +513,15 @@ def _walk(
                 _walk(child, source, out, depth, itertools.repeat(pid))
         return
     if t in _DEPTH_NODES:
+        first = len(out)
         for child in node.children:
             if child.is_named:
                 _walk(child, source, out, depth + 1, pipes)
+        scope = next(_SUB_IDS)
+        out[first:] = [
+            replace(c, scope=scope) if c.paren_depth == depth + 1 and not c.scope else c
+            for c in out[first:]
+        ]
         return
     if t in _CONTAINER_NODES or node.named_child_count:
         for child in node.children:
@@ -661,11 +678,18 @@ def apply_cwds(parsed: ParsedScript, initial: str) -> None:
     subshell, matching shell semantics closely enough for path classification.
     """
     frames: list[str] = [posixpath.normpath(initial)]
+    scopes: list[int] = [0]
     for idx, cmd in enumerate(parsed.commands):
-        frames = frames[: cmd.paren_depth + 1]
-        while len(frames) <= cmd.paren_depth:
+        depth = cmd.paren_depth
+        frames = frames[: depth + 1]
+        scopes = scopes[: depth + 1]
+        while len(frames) <= depth:
             frames.append(frames[-1])
-        cwd = frames[cmd.paren_depth]
+            scopes.append(-1)
+        if depth and scopes[depth] != cmd.scope:
+            frames[depth] = frames[depth - 1]  # a new subshell starts from its parent's cwd
+        scopes[depth] = cmd.scope
+        cwd = frames[depth]
         parsed.commands[idx] = replace(cmd, cwd=cwd)
         if cmd.program in CD_PROGRAMS:
             frames[cmd.paren_depth] = _cd_target(cmd, cwd)

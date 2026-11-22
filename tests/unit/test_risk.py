@@ -154,3 +154,14 @@ def test_parser_edge_cases_are_not_bypasses(script: str, rule: str) -> None:
     report = analyze(script, "/ws")
     assert rule in report.rules
     assert report.level is RiskLevel.HIGH
+
+
+def test_sibling_substitutions_do_not_share_a_directory() -> None:
+    report = analyze('cd /etc; echo <(cd /ws) "$(rm -rf note)"', "/ws")
+    assert report.level is RiskLevel.HIGH and "destructive_rm" in report.rules
+
+
+def test_subshell_redirect_opens_in_the_outer_directory() -> None:
+    report = analyze("(cd /etc; printf hello) > note", "/ws")
+    assert "write_outside_workspace" not in report.rules
+    assert "write_outside_workspace" in analyze("(cd /ws; printf hi) > /etc/x", "/ws").rules
