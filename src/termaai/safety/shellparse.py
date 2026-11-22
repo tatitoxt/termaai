@@ -423,6 +423,25 @@ def _redirect_text(source: bytes, node: Any) -> tuple[str, str] | None:
     return op, _word_text(dest, source)
 
 
+def _redirects_of(source: bytes, node: Any) -> list[tuple[str, str]]:
+    """Redirections of a redirect node; a heredoc also yields any ``> file`` nested in it."""
+    if node.type != "heredoc_redirect":
+        rt = _redirect_text(source, node)
+        return [rt] if rt else []
+    out: list[tuple[str, str]] = []
+    for child in node.children:
+        if child.type == "heredoc_start":
+            out.append(("<<", _word_text(child, source)))
+        elif child.type == "file_redirect":
+            out.extend(_redirects_of(source, child))
+    return out
+
+
+# Commands inside $( ) / <( ) get pipeline ids of their own, so they never sit
+# between the stages of the pipeline that contains them.
+_SUB_IDS = itertools.count(1 << 40)
+
+
 def _walk(
     node: Any, source: bytes, out: list[SimpleCommand], depth: int, pipes: Iterator[int]
 ) -> None:
@@ -436,37 +455,45 @@ def _walk(
         if cmd.program in SHELLS:
             script = inline_script(cmd.args)
             if script:
+                first = len(out)
                 inner_tree = _GRAMMAR_PARSER.parse(script.encode("utf-8"))
                 _walk(inner_tree.root_node, script.encode("utf-8"), out, depth, pipes)
+                # inline commands run where the shell runs, not at their inner line numbers
+                out[first:] = [replace(c, line=cmd.line) for c in out[first:]]
         return
     if t == "redirected_statement":
         start = len(out)
         for child in node.children:
             if child.is_named and child.type not in ("file_redirect", "heredoc_redirect"):
                 _walk(child, source, out, depth, pipes)
+        redirect_nodes = [
+            c for c in node.children if c.type in ("file_redirect", "heredoc_redirect")
+        ]
         redirects = tuple(
-            rt
-            for c in node.children
-            if c.type in ("file_redirect", "heredoc_redirect")
-            for rt in [_redirect_text(source, c)]
-            if rt
+            Redirect(op=o, target=t) for c in redirect_nodes for o, t in _redirects_of(source, c)
         )
         # attach to the last command emitted at this depth — nested substitution
-        # commands emitted after the parent must not receive its redirect
+        # commands emitted after the parent must not receive its redirect. A
+        # redirected subshell/group falls back to its last inner command, and a
+        # bare `> file` becomes a no-op command so the write is still analyzed.
         if redirects:
-            for i in range(len(out) - 1, start - 1, -1):
-                if out[i].paren_depth == depth:
-                    last = out[i]
-                    out[i] = replace(
-                        last,
-                        redirects=last.redirects
-                        + tuple(Redirect(op=o, target=t) for o, t in redirects),
+            emitted = range(len(out) - 1, start - 1, -1)
+            target = next((i for i in emitted if out[i].paren_depth == depth), None)
+            if target is None:
+                target = next(iter(emitted), None)
+            if target is None:
+                out.append(
+                    SimpleCommand(
+                        line=node.start_point[0] + 1,
+                        argv=(":",),
+                        pipeline=next(pipes),
+                        paren_depth=depth,
                     )
-                    break
-        if start == len(out):
-            for child in node.children:
-                if child.is_named:
-                    _walk(child, source, out, depth, pipes)
+                )
+                target = len(out) - 1
+            out[target] = replace(out[target], redirects=out[target].redirects + redirects)
+        for c in redirect_nodes:
+            _walk_subs(c, source, out, depth, _SUB_IDS)
         return
     if t == "pipeline":
         pid: int = next(pipes)
@@ -527,10 +554,12 @@ def _walk_subs(
     for child in node.children:
         if not child.is_named:
             continue
-        if child.type in ("command_substitution", "subshell"):
+        if child.type in ("command_substitution", "process_substitution"):
+            _walk(child, source, out, depth, _SUB_IDS)
+        elif child.type == "subshell":
             _walk(child, source, out, depth, pipes)
-        elif child.type == "process_substitution" or child.type in _COMMAND_NODES:
-            continue  # process-subst content is already inlined into the parent argv
+        elif child.type in _COMMAND_NODES:
+            continue
         else:
             _walk_subs(child, source, out, depth, pipes)
 
@@ -558,13 +587,12 @@ def _grammar_command(node: Any, source: bytes, depth: int, pipes: Iterator[int])
     named = [c for c in node.children if c.is_named]
     for child in named:
         if child.type == "command_name":
-            argv.append(_word_text(child, source))
+            parts = [c for c in child.children if c.is_named]
+            argv.append(_word_text(parts[0] if len(parts) == 1 else child, source))
         elif child.type == "variable_assignment":
             assignments.append(source[child.start_byte : child.end_byte].decode("utf-8", "replace"))
         elif child.type in ("file_redirect", "heredoc_redirect"):
-            rt = _redirect_text(source, child)
-            if rt:
-                redirects.append(rt)
+            redirects.extend(_redirects_of(source, child))
         elif child.type == "command_substitution":
             continue  # opaque substitution arg — the inner commands are emitted separately
         elif child.type == "process_substitution":
