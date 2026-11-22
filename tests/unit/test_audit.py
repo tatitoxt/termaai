@@ -84,3 +84,40 @@ def test_read_archived_oldest_first(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         )
     archived = log.read(archived=True)
     assert [e["script"][:4] for e in archived] == [f"cmd{i}" for i in range(10)]
+
+
+def test_rotation_prunes_segments_above_a_reduced_keep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for n in range(1, 6):
+        (tmp_path / f"history.{n}.jsonl").write_text("{}\n")
+    (tmp_path / "history.jsonl").write_text("x" * 300 + "\n")
+    monkeypatch.setenv("TERMAAI_AUDIT_MAX_BYTES", "200")
+    monkeypatch.setenv("TERMAAI_AUDIT_KEEP", "2")
+    AuditLog(tmp_path / "history.jsonl").append(
+        AuditRecord(kind="ask", decision="executed", risk_level="LOW", script="echo")
+    )
+    assert sorted(p.name for p in tmp_path.glob("history.*.jsonl")) == [
+        "history.1.jsonl",
+        "history.2.jsonl",
+    ]
+
+
+def test_rotation_tolerates_a_concurrent_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "history.jsonl"
+    live.write_text("x" * 300 + "\n")
+    monkeypatch.setenv("TERMAAI_AUDIT_MAX_BYTES", "200")
+    log = AuditLog(live)
+    real_replace = Path.replace
+
+    def _racing_replace(self: Path, target: Path) -> Path:
+        if self == live:  # another process rotated the live file first
+            real_replace(self, target)
+            raise FileNotFoundError(str(self))
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _racing_replace)
+    log.append(AuditRecord(kind="ask", decision="executed", risk_level="LOW", script="echo"))
+    assert [e["script"] for e in log.read()] == ["echo"]

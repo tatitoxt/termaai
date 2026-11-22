@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -85,14 +86,18 @@ class AuditLog:
         if max_bytes <= 0 or not self.path.exists() or self.path.stat().st_size <= max_bytes:
             return
         keep = max(1, _env_int("TERMAAI_AUDIT_KEEP", 5))
-        oldest = self._segment(keep)
-        if oldest.exists():
-            oldest.unlink()
+        # drop the oldest segment plus any left over from a larger previous keep
+        n = keep
+        while n == keep or self._segment(n).exists():
+            self._segment(n).unlink(missing_ok=True)
+            n += 1
+        # another process may rotate concurrently; a segment that vanished
+        # between the size check and the rename was already moved by it
         for n in range(keep - 1, 0, -1):
-            seg = self._segment(n)
-            if seg.exists():
-                seg.replace(self._segment(n + 1))
-        self.path.replace(self._segment(1))
+            with contextlib.suppress(FileNotFoundError):
+                self._segment(n).replace(self._segment(n + 1))
+        with contextlib.suppress(FileNotFoundError):
+            self.path.replace(self._segment(1))
 
     def append(self, record: AuditRecord) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
