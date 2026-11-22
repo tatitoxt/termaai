@@ -95,7 +95,13 @@ def test_single_quoted_substitution_with_inner_spaces_is_not_a_command() -> None
 
 def test_substitution_with_nested_parentheses_is_parsed() -> None:
     cmds = parse('echo "$(bash <(curl -s x))"').commands
-    assert [(c.program, c.args[:1]) for c in cmds] == [("bash", ("curl",)), ("echo", cmds[1].args)]
+    # the process-substituted curl is emitted as its own command and stays
+    # inlined into bash's argv so `bash <(curl ...)` is still recognised
+    assert [(c.program, c.args[:1]) for c in cmds] == [
+        ("curl", ("-s",)),
+        ("bash", ("curl",)),
+        ("echo", cmds[2].args),
+    ]
 
 
 def test_arithmetic_expansion_is_not_a_command_substitution() -> None:
@@ -162,12 +168,14 @@ def test_grammar_backend_matches_hand_parser_on_corpus() -> None:
             hand = sp.parse(src)
         finally:
             sp._GRAMMAR_PARSER = sp._ts.Parser(sp._ts.Language(sp._tsb.language()))
-        # Process-substitution internals are inlined into the parent argv by the
-        # grammar backend, while the hand tokenizer emits phantom fragments —
-        # program lists agree everywhere else.
-        assert sorted(c.program for c in grammar.commands) == sorted(
-            c.program for c in hand.commands
-        ), src
+        # The grammar backend also emits process-substitution internals as
+        # commands; the hand tokenizer does not — program lists agree otherwise.
+        grammar_programs = sorted(c.program for c in grammar.commands)
+        hand_programs = sorted(c.program for c in hand.commands)
+        if "<(" in src:
+            assert set(hand_programs) <= set(grammar_programs), src
+        else:
+            assert grammar_programs == hand_programs, src
 
 
 def test_parse_falls_back_to_hand_parser_on_syntax_error() -> None:
@@ -183,3 +191,45 @@ def test_parse_falls_back_to_hand_parser_on_syntax_error() -> None:
     finally:
         sp._GRAMMAR_PARSER = gp
     assert [c.program for c in grammar.commands] == [c.program for c in hand.commands]
+
+
+def test_redirect_without_command_is_kept() -> None:
+    cmds = parse("> /etc/hosts").commands
+    assert [(c.program, [r.target for r in c.redirects]) for c in cmds] == [(":", ["/etc/hosts"])]
+
+
+def test_redirected_subshell_attaches_redirect_to_inner_command() -> None:
+    cmds = parse("(echo hi) > /etc/hosts").commands
+    assert [r.target for c in cmds for r in c.redirects] == ["/etc/hosts"]
+
+
+def test_heredoc_with_output_redirect_records_both() -> None:
+    (cmd,) = parse("cat <<EOF > /etc/hosts\nhi\nEOF\n").commands
+    assert [(r.op, r.target) for r in cmd.redirects] == [("<<", "EOF"), (">", "/etc/hosts")]
+
+
+def test_substitution_in_redirect_target_is_emitted() -> None:
+    assert "rm" in programs('echo hi > "$(rm -rf /etc)"')
+
+
+def test_process_substitution_commands_are_emitted() -> None:
+    assert "rm" in programs("diff <(true) <(rm -rf /etc)")
+
+
+def test_quoted_command_name_is_unquoted() -> None:
+    assert programs('"rm" -rf /etc') == ["rm"]
+
+
+def test_substitution_does_not_split_a_pipeline() -> None:
+    pipelines = parse('curl x | sh -s -- "$(echo hi)"').pipelines()
+    assert [[c.program for c in p] for p in pipelines if len(p) > 1] == [["curl", "sh"]]
+
+
+def test_inline_script_commands_keep_their_shell_line() -> None:
+    cmds = parse("echo hi\ncd /etc\nbash -c 'rm -rf passwd'").commands
+    assert [(c.program, c.line) for c in cmds] == [
+        ("echo", 1),
+        ("cd", 2),
+        ("bash", 3),
+        ("rm", 3),
+    ]
