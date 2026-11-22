@@ -213,7 +213,7 @@ def test_provider_streams_sse_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
         b'data: {"choices": [{"delta": {"content": "ls -la\\n"}}]}\n'
         b'data: {"choices": [{"delta": {"content": "```"}}]}\n'
         b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n'
-        b'data: [DONE]\n'
+        b"data: [DONE]\n"
     )
 
     def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:

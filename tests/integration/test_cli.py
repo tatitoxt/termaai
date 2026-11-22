@@ -68,9 +68,7 @@ def test_high_risk_is_blocked_without_prompt() -> None:
 
 
 def test_findings_are_fed_back_for_a_safer_script(tmp_path: Path) -> None:
-    result = invoke(
-        ["ask", "install the tool", "--workspace", str(tmp_path), *SUB], "y\n"
-    )
+    result = invoke(["ask", "install the tool", "--workspace", str(tmp_path), *SUB], "y\n")
     assert result.exit_code == 0, result.output
     assert "Revision 1" in result.output
     record = last_record()
@@ -280,6 +278,7 @@ def test_ask_in_docker_sandbox(tmp_path: Path, docker_ready: None) -> None:
     assert (tmp_path / "notes.txt").exists()
     assert last_record()["sandbox"] == "docker"
 
+
 def test_edit_before_run_replaces_script_and_audits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -295,13 +294,10 @@ def test_edit_before_run_replaces_script_and_audits(
     assert record["edited"] is True
 
 
-def test_edit_can_fix_a_high_risk_script(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_edit_can_fix_a_high_risk_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("click.edit", lambda text, **kw: "echo safe now\n")
     result = invoke(
-        ["ask", "install the tool", "--workspace", str(tmp_path),
-         "--edit", "--revise", "0", *SUB],
+        ["ask", "install the tool", "--workspace", str(tmp_path), "--edit", "--revise", "0", *SUB],
         "y\n",
     )
     assert result.exit_code == 0, result.output

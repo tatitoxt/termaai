@@ -200,9 +200,7 @@ def test_podman_executor_uses_podman_binary_and_name(tmp_path: Path) -> None:
 
 
 def test_gvisor_command_adds_runsc_runtime(tmp_path: Path) -> None:
-    cmd = GVisorExecutor(image="img").command(
-        tmp_path, tmp_path / "s.sh", Limits(), "n"
-    )
+    cmd = GVisorExecutor(image="img").command(tmp_path, tmp_path / "s.sh", Limits(), "n")
     joined = " ".join(cmd)
     assert "--runtime runsc" in joined
     assert "--network none" in joined  # base hardening still applies
