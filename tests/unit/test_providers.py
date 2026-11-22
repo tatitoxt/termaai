@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import urllib.error
 
 import pytest
 
@@ -129,3 +130,78 @@ def test_openai_compat_revise_sends_problems(monkeypatch: pytest.MonkeyPatch) ->
     user = sent["payload"]["messages"][1]["content"]  # type: ignore[index]
     assert "install it" in user and "remote_code_execution" in user and "curl x | sh" in user
     assert out.script.startswith("#!") and "ls" in out.script
+
+
+class _StubResponse(io.BytesIO):
+    def __enter__(self) -> _StubResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+def _http_error(code: int, retry_after: str | None = None) -> urllib.error.HTTPError:
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    return urllib.error.HTTPError("http://x", code, "err", headers, None)  # type: ignore[arg-type]
+
+
+def test_provider_retries_transient_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:
+        calls.append(1)
+        if len(calls) == 1:
+            raise _http_error(429, retry_after="0")
+        return _StubResponse(b'{"choices": [{"message": {"content": "```bash\\nls\\n```"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    sleeps: list[float] = []
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x", sleep=sleeps.append)
+    assert "ls" in provider.generate("list").script
+    assert len(calls) == 2 and sleeps == [0.0]
+
+
+def test_provider_retry_after_is_respected_and_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:
+        calls.append(1)
+        if len(calls) < 3:
+            raise _http_error(503, retry_after="60")
+        return _StubResponse(b'{"choices": [{"message": {"content": "```bash\\nls\\n```"}}]}')
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    sleeps: list[float] = []
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x", sleep=sleeps.append)
+    provider.generate("list")
+    assert sleeps == [30.0, 30.0]
+
+
+def test_provider_does_not_retry_client_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:
+        calls.append(1)
+        raise _http_error(401)
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    provider = OpenAICompatibleProvider("openai", "k", "m", "http://x", sleep=lambda s: None)
+    with pytest.raises(ProviderError, match="HTTP 401"):
+        provider.generate("list")
+    assert len(calls) == 1
+
+
+def test_provider_gives_up_after_max_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+
+    def _fake_urlopen(req: object, **kwargs: object) -> _StubResponse:
+        calls.append(1)
+        raise _http_error(500)
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    provider = OpenAICompatibleProvider(
+        "openai", "k", "m", "http://x", max_retries=2, sleep=lambda s: None
+    )
+    with pytest.raises(ProviderError, match="HTTP 500"):
+        provider.generate("list")
+    assert len(calls) == 3

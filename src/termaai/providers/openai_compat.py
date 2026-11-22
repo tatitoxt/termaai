@@ -6,9 +6,10 @@ Uses only the standard library so no SDK is required. Opt-in via environment var
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from termaai.providers.base import Generation, ProviderError, extract_script
@@ -41,6 +42,8 @@ class OpenAICompatibleProvider:
         model: str,
         base_url: str,
         timeout: float = 60.0,
+        max_retries: int = 3,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not api_key:
             raise ProviderError(f"{name}: missing API key")
@@ -49,6 +52,8 @@ class OpenAICompatibleProvider:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.max_retries = max_retries
+        self._sleep = sleep
 
     def _chat(self, system: str, user: str) -> str:
         payload = {
@@ -59,6 +64,37 @@ class OpenAICompatibleProvider:
                 {"role": "user", "content": user},
             ],
         }
+        body = self._post_with_retries(payload)
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(f"{self.name}: unexpected response shape") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderError(f"{self.name}: empty response (the model may have refused)")
+        return content
+
+    @staticmethod
+    def _retry_delay(exc: Exception, attempt: int) -> float | None:
+        """Seconds to wait before the next attempt, or None when not retryable.
+
+        Retries cover transient failures: HTTP 429 and 5xx, connection errors
+        and timeouts. Other 4xx codes and malformed responses fail fast.
+        """
+        if isinstance(exc, urllib.error.HTTPError):
+            if exc.code == 429 or exc.code >= 500:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                if retry_after:
+                    try:
+                        return min(float(retry_after), 30.0)
+                    except ValueError:
+                        pass
+                return min(2.0**attempt, 16.0)
+            return None
+        if isinstance(exc, urllib.error.URLError | TimeoutError):
+            return min(2.0**attempt, 16.0)
+        return None
+
+    def _post_with_retries(self, payload: dict[str, Any]) -> dict[str, Any]:
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode(),
@@ -68,20 +104,26 @@ class OpenAICompatibleProvider:
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body: dict[str, Any] = json.loads(resp.read().decode())
-        except urllib.error.HTTPError as exc:
-            raise ProviderError(f"{self.name}: HTTP {exc.code} from API") from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise ProviderError(f"{self.name}: request failed ({exc})") from exc
-        try:
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderError(f"{self.name}: unexpected response shape") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise ProviderError(f"{self.name}: empty response (the model may have refused)")
-        return content
+        last: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body: dict[str, Any] = json.loads(resp.read().decode())
+                    return body
+            except urllib.error.HTTPError as exc:
+                delay = self._retry_delay(exc, attempt)
+                if delay is None or attempt >= self.max_retries:
+                    raise ProviderError(f"{self.name}: HTTP {exc.code} from API") from exc
+                last = exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                delay = self._retry_delay(exc, attempt)
+                if delay is None or attempt >= self.max_retries:
+                    raise ProviderError(f"{self.name}: request failed ({exc})") from exc
+                last = exc
+            except json.JSONDecodeError as exc:
+                raise ProviderError(f"{self.name}: request failed ({exc})") from exc
+            self._sleep(delay)
+        raise ProviderError(f"{self.name}: request failed ({last})") from last
 
     def generate(self, request: str) -> Generation:
         reply = self._chat(GENERATE_PROMPT, request)
