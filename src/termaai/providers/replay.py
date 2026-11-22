@@ -9,6 +9,7 @@ can exercise real model output without API keys or network access.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +29,9 @@ class RecordingProvider:
 
     def _record(self, entry: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as fh:
+        # recordings hold prompts and scripts: owner-only, like the audit log
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
 
     def generate(self, request: str) -> Generation:

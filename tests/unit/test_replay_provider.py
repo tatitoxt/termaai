@@ -81,3 +81,16 @@ def test_get_provider_replay_and_recording(fixture_file, tmp_path):
     env = {"OPENAI_API_KEY": "x", "TERMAAI_RECORD_FILE": str(recorded)}
     provider = get_provider("openai", env=env)
     assert isinstance(provider, RecordingProvider)
+
+
+def test_recording_is_owner_only(tmp_path):
+    import os
+    import stat
+
+    old = os.umask(0o022)
+    try:
+        path = tmp_path / "rec.jsonl"
+        RecordingProvider(FakeProvider(), path).generate("list files")
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
