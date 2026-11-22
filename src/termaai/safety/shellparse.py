@@ -8,6 +8,7 @@ parser; anything it cannot resolve statically is reported as such by the callers
 
 from __future__ import annotations
 
+import itertools
 import posixpath
 import re
 import shlex
@@ -471,7 +472,7 @@ def _walk(
         pid: int = next(pipes)
         for child in node.children:
             if child.is_named and child.type != "comment":
-                _walk(child, source, out, depth, iter([pid] * 1_000_000))
+                _walk(child, source, out, depth, itertools.repeat(pid))
         return
     if t in _DEPTH_NODES:
         for child in node.children:
