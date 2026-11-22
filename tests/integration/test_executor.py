@@ -209,9 +209,23 @@ def test_gvisor_command_adds_runsc_runtime(tmp_path: Path) -> None:
 
 def test_select_executor_gvisor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("termaai.executor.docker_available", lambda docker="docker": True)
-    monkeypatch.setattr("termaai.executor.shutil.which", lambda b: "/usr/bin/runsc")
+    # the runtime is looked up on the daemon, so a remote daemon with runsc works
+    monkeypatch.setattr("termaai.executor.shutil.which", lambda b: None)
+    monkeypatch.setattr("termaai.executor.docker_has_runtime", lambda rt, docker="docker": True)
     assert isinstance(select_executor("gvisor"), GVisorExecutor)
     # runsc missing -> clear error, never a silent fallback
-    monkeypatch.setattr("termaai.executor.shutil.which", lambda b: None)
+    monkeypatch.setattr("termaai.executor.docker_has_runtime", lambda rt, docker="docker": False)
     with pytest.raises(SandboxError, match="runsc is not installed"):
         select_executor("gvisor")
+
+
+def test_docker_has_runtime_reads_daemon_runtimes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    def _run(args: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, stdout='{"runc":{},"runsc":{}}\n', stderr="")
+
+    monkeypatch.setattr("termaai.executor.subprocess.run", _run)
+    from termaai.executor import docker_has_runtime
+
+    assert docker_has_runtime("runsc") and not docker_has_runtime("kata")
