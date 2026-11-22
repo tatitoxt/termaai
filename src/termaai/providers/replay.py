@@ -9,12 +9,12 @@ can exercise real model output without API keys or network access.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from termaai.providers.base import Generation, Provider, ProviderError
+from termaai.providers.base import Generation, Provider, ProviderError, Streamer
 
 
 class RecordingProvider:
@@ -33,6 +33,15 @@ class RecordingProvider:
 
     def generate(self, request: str) -> Generation:
         gen = self.inner.generate(request)
+        self._record(
+            {"op": "generate", "request": request, "script": gen.script, "summary": gen.summary}
+        )
+        return gen
+
+    def generate_stream(self, request: str, on_token: Callable[[str], None]) -> Generation:
+        if not isinstance(self.inner, Streamer):
+            raise ProviderError(f"{self.inner.name} provider cannot stream")
+        gen = self.inner.generate_stream(request, on_token)
         self._record(
             {"op": "generate", "request": request, "script": gen.script, "summary": gen.summary}
         )
@@ -110,6 +119,12 @@ class ReplayProvider:
         return Generation(
             script=str(rec.payload["script"]), summary=str(rec.payload.get("summary", ""))
         )
+
+    def generate_stream(self, request: str, on_token: Callable[[str], None]) -> Generation:
+        gen = self.generate(request)
+        # The fixture stores the extracted script, not raw tokens: emit it whole.
+        on_token(gen.script)
+        return gen
 
     def explain(self, script: str) -> str:
         rec = self._next("explain", script[:60])

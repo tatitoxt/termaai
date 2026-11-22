@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -33,6 +33,15 @@ class Reviser(Protocol):
     version must address while still doing what the request asked for."""
 
     def revise(self, request: str, script: str, problems: Sequence[str]) -> Generation: ...
+
+
+@runtime_checkable
+class Streamer(Protocol):
+    """Optional provider capability: stream the model reply token by token.
+    `on_token` is called with each text chunk as it arrives; the returned
+    Generation is the fully accumulated result, identical to `generate`."""
+
+    def generate_stream(self, request: str, on_token: Callable[[str], None]) -> Generation: ...
 
 
 _FENCE = re.compile(r"```(?:bash|sh|shell)?[ \t]*\n(.*?)```", re.DOTALL)

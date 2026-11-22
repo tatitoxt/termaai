@@ -26,6 +26,13 @@ def test_replay_serves_recorded_generation(fixture_file):
     assert "ls -la" in gen.script
 
 
+def test_replay_streams_recorded_generation(fixture_file):
+    replay = ReplayProvider(fixture_file)
+    tokens: list[str] = []
+    gen = replay.generate_stream("list files", tokens.append)
+    assert "ls -la" in gen.script and tokens == [gen.script]
+
+
 def test_replay_rejects_wrong_request(fixture_file):
     replay = ReplayProvider(fixture_file)
     with pytest.raises(ProviderError, match="recorded request"):
