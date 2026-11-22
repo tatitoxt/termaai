@@ -93,6 +93,8 @@ class SimpleCommand:
     # identifies the subshell/substitution instance at ``paren_depth``, so
     # sibling substitutions do not share a working directory
     scope: int = field(default=0, compare=False)
+    # stdin comes from a file opened by an enclosing group/subshell/loop
+    stdin_redirected: bool = field(default=False, compare=False)
 
     @property
     def program(self) -> str:
@@ -502,6 +504,8 @@ def _walk(
                 )
                 out.insert(start, no_op)
                 target = start
+                if any(r.op == "<" for r in redirects):
+                    out[start + 1 :] = [replace(c, stdin_redirected=True) for c in out[start + 1 :]]
             out[target] = replace(out[target], redirects=out[target].redirects + redirects)
         for c in redirect_nodes:
             _walk_subs(c, source, out, depth, _SUB_IDS)
