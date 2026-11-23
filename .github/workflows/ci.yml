@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-dev.txt
+      - run: pip install -r requirements-dev.txt -e .
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit==2.7.3
+      - name: Runtime dependencies (strict)
+        run: pip-audit .
+      - name: Development tools
+        # Both ignored advisories are MODERATE and only affect filelock, a transitive
+        # dependency of pip-audit itself; the only fixed release is very recent. See README.
+        run: >-
+          pip-audit -r requirements-dev.txt
+          --ignore-vuln GHSA-8mx5-7m5m-r77g
+          --ignore-vuln GHSA-69hj-f68j-2879
+
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    env:
+      TERMAAI_REQUIRE_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-dev.txt
+      - run: pip install -r requirements-dev.txt -e .
+      - name: Ensure ShellCheck
+        run: command -v shellcheck || (sudo apt-get update && sudo apt-get install -y shellcheck)
+      - name: Tool versions
+        run: |
+          bash --version | head -1
+          shellcheck --version | sed -n 2p
+          docker version --format 'docker {{.Server.Version}}'
+      - name: Pull sandbox image
+        # Mirror avoids anonymous Docker Hub rate limits; tagged as the default image name.
+        run: |
+          docker pull mirror.gcr.io/library/bash:5.2
+          docker tag mirror.gcr.io/library/bash:5.2 bash:5.2
+      - name: Unit and integration tests
+        run: pytest tests/unit tests/integration --cov=termaai --cov-report=term-missing
+      - name: E2E tests (pexpect, real CLI entrypoint)
+        run: pytest tests/e2e -v

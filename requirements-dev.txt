@@ -1,0 +1,10 @@
+pexpect==4.9.0
+pytest==9.0.3
+pytest-cov==6.0.0
+ruff==0.8.4
+mypy==1.13.0
+pip-audit==2.7.3
+# transitive (pip-audit -> CacheControl[filecache]); see README "Dependency audit"
+filelock==3.20.3
+tomli==2.0.1
+# mypy (python_version=3.10) follows the tomllib fallback branch

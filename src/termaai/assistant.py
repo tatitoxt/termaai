@@ -1,0 +1,468 @@
+"""The safety pipeline: generate -> check -> analyze -> confirm -> sandbox -> audit."""
+
+from __future__ import annotations
+
+import re
+import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Protocol
+
+import click
+from rich.console import Console
+from rich.markup import escape
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
+
+from termaai.audit import AuditLog, AuditRecord
+from termaai.executor import (
+    DockerExecutor,
+    ExecutionResult,
+    Executor,
+    Limits,
+    SandboxError,
+    SubprocessExecutor,
+    select_executor,
+)
+from termaai.plan import Plan, build_plan
+from termaai.providers import Provider, ProviderError
+from termaai.providers.base import Reviser, Streamer
+from termaai.safety.checks import ShellCheckResult, SyntaxResult, check_syntax, run_shellcheck
+from termaai.safety.policy import Policy, PolicyError, discover
+from termaai.safety.policy import load as load_policy
+from termaai.safety.risk import RiskLevel, RiskReport, analyze
+
+EXIT_OK = 0
+EXIT_DENIED = 3
+EXIT_BLOCKED = 4
+EXIT_ERROR = 5
+FORCE_PHRASE = "run high-risk"
+LEVEL_STYLE = {RiskLevel.LOW: "green", RiskLevel.MEDIUM: "yellow", RiskLevel.HIGH: "bold red"}
+# C0/C1 control characters except tab and newline, including ESC and CR
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+class Prompter(Protocol):
+    def confirm(self, question: str) -> bool: ...
+
+    def text(self, question: str) -> str: ...
+
+    def edit(self, script: str) -> str | None: ...
+
+
+class ConsolePrompter:
+    """Reads answers from the terminal; anything but y/yes (or EOF) means no."""
+
+    def __init__(self, console: Console) -> None:
+        self.console = console
+
+    def confirm(self, question: str) -> bool:
+        return self.text(f"{question} [y/N]: ").strip().lower() in {"y", "yes"}
+
+    def text(self, question: str) -> str:
+        try:
+            return self.console.input(escape(question))
+        except (EOFError, KeyboardInterrupt):
+            self.console.print()
+            return ""
+
+    def edit(self, script: str) -> str | None:
+        """Opens the script in $EDITOR; None when the edit was aborted."""
+        try:
+            return click.edit(script, extension=".sh")
+        except click.ClickException:
+            return None
+
+
+@dataclass
+class RunOptions:
+    dry_run: bool = False
+    force: bool = False
+    sandbox: str = "auto"
+    timeout: float = 30.0
+    workspace: Path | None = None
+    policy_file: Path | None = None
+    # Re-generations fed with analyzer findings when a script is blocked.
+    revise: int = 2
+    # Open the generated script in $EDITOR before running it.
+    edit: bool = False
+    # Stream the provider reply token by token when the provider supports it.
+    stream: bool = False
+
+
+@dataclass
+class Review:
+    script: str
+    workspace: Path
+    syntax: SyntaxResult
+    shellcheck: ShellCheckResult
+    report: RiskReport
+    plan: Plan
+    policy: Policy
+
+
+class Assistant:
+    def __init__(
+        self,
+        console: Console,
+        provider: Provider,
+        audit: AuditLog,
+        prompter: Prompter | None = None,
+        executor_factory: Callable[[str], Executor] = select_executor,
+    ) -> None:
+        self.console = console
+        self.provider = provider
+        self.audit = audit
+        self.prompter = prompter or ConsolePrompter(console)
+        self.executor_factory = executor_factory
+
+    # ----------------------------------------------------------------- review
+    def review(self, script: str, workspace: Path, policy: Policy | None = None) -> Review:
+        ws = str(workspace.resolve())
+        policy = policy if policy is not None else discover(workspace)
+        return Review(
+            script=script,
+            workspace=workspace,
+            syntax=check_syntax(script),
+            shellcheck=run_shellcheck(script),
+            report=analyze(script, ws, policy),
+            plan=build_plan(script, ws),
+            policy=policy,
+        )
+
+    def _record(self, review: Review, kind: str, decision: str, **extra: object) -> AuditRecord:
+        record = AuditRecord(
+            kind=kind,
+            decision=decision,
+            risk_level=str(review.report.level),
+            script=review.script,
+            provider=self.provider.name,
+            findings=[f.to_dict() for f in review.report.findings],
+            shellcheck=[i.to_dict() for i in review.shellcheck.issues],
+            syntax_ok=review.syntax.ok,
+            workspace=str(review.workspace),
+            policy=str(review.policy.source) if review.policy.source else None,
+        )
+        for key, value in extra.items():
+            setattr(record, key, value)
+        self.audit.append(record)
+        return record
+
+    # ------------------------------------------------------------- rendering
+    def _emit_token(self, token: str) -> None:
+        # model output must not drive the terminal (OSC 52 clipboard writes,
+        # cursor movement that hides text before the confirmation prompt)
+        self.console.file.write(_CONTROL_CHARS.sub("", token))
+        self.console.file.flush()
+
+    def show_script(self, script: str, title: str) -> None:
+        self.console.print(
+            Panel(Syntax(script, "bash", theme="ansi_dark", line_numbers=True), title=title)
+        )
+
+    def show_checks(self, review: Review) -> None:
+        if review.syntax.ok:
+            self.console.print("[green]bash -n:[/] syntax OK")
+        else:
+            self.console.print(
+                f"[bold red]bash -n: syntax error[/]\n{escape(review.syntax.message)}"
+            )
+        sc = review.shellcheck
+        if not sc.available:
+            self.console.print("[dim]ShellCheck: not installed, skipped[/]")
+        elif sc.error:
+            self.console.print(f"[yellow]ShellCheck: {escape(sc.error)}[/]")
+        elif not sc.issues:
+            self.console.print("[green]ShellCheck:[/] no issues")
+        else:
+            table = Table(title="ShellCheck", show_lines=False)
+            for col in ("line", "level", "code", "message"):
+                table.add_column(col)
+            for issue in sc.issues:
+                table.add_row(
+                    str(issue.line), issue.level, f"SC{issue.code}", escape(issue.message)
+                )
+            self.console.print(table)
+
+    def show_risk(self, report: RiskReport) -> None:
+        level = report.level
+        style = LEVEL_STYLE[level]
+        self.console.print(f"Risk level: [{style}]{level}[/]")
+        if report.findings:
+            table = Table(title="Risk findings")
+            for col in ("level", "rule", "line", "why"):
+                table.add_column(col)
+            for f in report.findings:
+                table.add_row(
+                    f"[{LEVEL_STYLE[f.level]}]{f.level}[/]", f.rule, str(f.line), escape(f.message)
+                )
+            self.console.print(table)
+
+    def show_plan(self, plan: Plan) -> None:
+        table = Table(title=escape(f"Dry-run plan (workspace: {plan.workspace})"))
+        for col in ("#", "line", "command", "effects"):
+            table.add_column(col)
+        for idx, step in enumerate(plan.steps, start=1):
+            table.add_row(str(idx), str(step.line), escape(step.command), ", ".join(step.effects))
+        self.console.print(table)
+        touches = plan.touches
+        if touches:
+            t2 = Table(title="Paths that would be touched")
+            for col in ("action", "path", "resolved", "scope"):
+                t2.add_column(col)
+            for t in touches:
+                scope = f"[red]{t.scope}[/]" if t.outside_workspace else t.scope
+                t2.add_row(t.action, escape(t.path), escape(t.resolved), scope)
+            self.console.print(t2)
+        else:
+            self.console.print("No file paths detected.")
+        for warning in plan.warnings:
+            self.console.print(f"[yellow]parser warning:[/] {escape(warning)}")
+
+    def show_result(self, result: ExecutionResult) -> None:
+        if result.stdout:
+            self.console.print(Panel(Text(result.stdout.rstrip("\n")), title="stdout"))
+        if result.stderr:
+            self.console.print(Panel(Text(result.stderr.rstrip("\n")), title="stderr"))
+        status = "timed out" if result.timed_out else f"exit code {result.exit_code}"
+        style = "green" if result.exit_code == 0 else "red"
+        self.console.print(
+            f"[{style}]Finished in {result.sandbox} sandbox: {status} "
+            f"({result.duration_s:.2f}s)[/]"
+        )
+
+    # ----------------------------------------------------------------- flows
+    def ask(self, prompt: str, options: RunOptions) -> int:
+        workspace = self._resolve_workspace(options)
+        try:
+            policy = self._resolve_policy(options, workspace)
+        except PolicyError as exc:
+            self.console.print(f"[bold red]Policy error:[/] {escape(str(exc))}")
+            return EXIT_ERROR
+        options = replace(options, workspace=workspace)
+        try:
+            if options.stream and isinstance(self.provider, Streamer):
+                generation = self.provider.generate_stream(prompt, self._emit_token)
+                self.console.file.write("\n")
+                self.console.file.flush()
+            else:
+                if options.stream:
+                    self.console.print(f"[dim]{self.provider.name} does not support streaming[/]")
+                generation = self.provider.generate(prompt)
+        except ProviderError as exc:
+            self.console.print(f"[bold red]Provider error:[/] {escape(str(exc))}")
+            return EXIT_ERROR
+        self.console.print(f"[bold]{self.provider.name}[/]: {escape(generation.summary)}")
+        script, revisions = self._revise_until_clean(
+            prompt, generation.script, workspace, policy, options
+        )
+        return self.run_script(script, options, kind="ask", prompt=prompt, revisions=revisions)
+
+    def _resolve_workspace(self, options: RunOptions) -> Path:
+        workspace = options.workspace or Path(tempfile.mkdtemp(prefix="termaai-ws-"))
+        workspace.mkdir(parents=True, exist_ok=True)
+        return workspace.resolve()
+
+    def _resolve_policy(self, options: RunOptions, workspace: Path) -> Policy:
+        if options.policy_file is not None:
+            return load_policy(options.policy_file)
+        return discover(workspace)
+
+    def _revise_until_clean(
+        self,
+        prompt: str,
+        script: str,
+        workspace: Path,
+        policy: Policy,
+        options: RunOptions,
+    ) -> tuple[str, int]:
+        """Feed analyzer problems back to the provider until the script would
+        pass the gates in run_script, or the revision budget is spent."""
+        revisions = 0
+        while revisions < max(0, options.revise):
+            review = self.review(script, workspace, policy)
+            if not self._would_block(review, options):
+                break
+            if not isinstance(self.provider, Reviser):
+                break
+            problems = self._problems(review)
+            try:
+                generation = self.provider.revise(prompt, script, problems)
+            except ProviderError as exc:
+                self.console.print(
+                    f"[yellow]Revision failed ({escape(str(exc))}); keeping the last script.[/]"
+                )
+                break
+            if generation.script == script:
+                break
+            script = generation.script
+            revisions += 1
+            self.console.print(
+                f"[cyan]Revision {revisions}[/]: {escape(generation.summary)} "
+                f"({len(problems)} problem(s) fed back)"
+            )
+        return script, revisions
+
+    @staticmethod
+    def _would_block(review: Review, options: RunOptions) -> bool:
+        if not review.syntax.ok:
+            return True
+        if review.report.level > review.policy.max_level:
+            return True
+        return review.report.level is RiskLevel.HIGH and not options.force
+
+    @staticmethod
+    def _problems(review: Review) -> list[str]:
+        problems: list[str] = []
+        if not review.syntax.ok:
+            problems.append(f"bash -n syntax error: {review.syntax.message}")
+        if review.report.level > review.policy.max_level:
+            problems.append(
+                f"risk level {review.report.level} exceeds the workspace limit "
+                f"{review.policy.max_level}"
+            )
+        problems.extend(f"{f.rule}: {f.message}" for f in review.report.findings)
+        problems.extend(f"shellcheck SC{i.code}: {i.message}" for i in review.shellcheck.issues)
+        return problems or ["the script was rejected; produce a safer version"]
+
+    def run_script(
+        self,
+        script: str,
+        options: RunOptions,
+        kind: str = "ask",
+        prompt: str | None = None,
+        source: str | None = None,
+        revisions: int = 0,
+    ) -> int:
+        workspace = self._resolve_workspace(options)
+        try:
+            policy = self._resolve_policy(options, workspace)
+        except PolicyError as exc:
+            self.console.print(f"[bold red]Policy error:[/] {escape(str(exc))}")
+            return EXIT_ERROR
+        review = self.review(script, workspace, policy)
+        base = {"prompt": prompt, "source": source, "forced": options.force, "revisions": revisions}
+        self.show_script(script, "Generated script" if kind == "ask" else "Script")
+        self.show_checks(review)
+        self.show_risk(review.report)
+
+        if options.edit:
+            edited = self.prompter.edit(script)
+            if edited is None:
+                self.console.print("[cyan]Edit aborted; nothing was run.[/]")
+                self._record(review, kind, "denied", **base)
+                return EXIT_DENIED
+            if not edited.strip():
+                self.console.print("[bold red]Edited script is empty; nothing was run.[/]")
+                self._record(review, kind, "denied", **base)
+                return EXIT_DENIED
+            if edited != script:
+                script = edited
+                base["edited"] = True
+                review = self.review(script, workspace, policy)
+                self.console.print("[cyan]Edited script accepted; re-running checks.[/]")
+                self.show_script(script, "Edited script")
+                self.show_checks(review)
+                self.show_risk(review.report)
+
+        if not review.syntax.ok:
+            self.console.print("[bold red]Blocked:[/] the script does not parse; nothing was run.")
+            self._record(review, kind, "blocked_syntax", **base)
+            return EXIT_BLOCKED
+        if options.dry_run:
+            self.show_plan(review.plan)
+            self.console.print("[cyan]Dry run:[/] nothing was executed.")
+            self._record(review, kind, "dry_run", dry_run=True, **base)
+            return EXIT_OK
+        if review.report.level > review.policy.max_level:
+            self.console.print(
+                f"[bold red]Blocked by policy:[/] risk {review.report.level} exceeds the "
+                f"workspace limit {review.policy.max_level} "
+                f"({review.policy.source}); not even --force can run it."
+            )
+            self._record(review, kind, "policy_blocked", **base)
+            return EXIT_BLOCKED
+        high = review.report.level is RiskLevel.HIGH
+        if high and not options.force:
+            self.console.print(
+                "[bold red]Blocked:[/] HIGH-risk script. Review the findings; re-run with "
+                "--force to override (a second confirmation will be required)."
+            )
+            self._record(review, kind, "blocked", **base)
+            return EXIT_BLOCKED
+
+        try:
+            executor = self._prepare_executor(options.sandbox)
+        except SandboxError as exc:
+            self.console.print(f"[bold red]Sandbox error:[/] {escape(str(exc))}")
+            self._record(review, kind, "error", **base)
+            return EXIT_ERROR
+
+        question = f"Run this script in the {executor.name} sandbox (workspace: {workspace})?"
+        if not self.prompter.confirm(question):
+            self.console.print("Cancelled; nothing was run.")
+            self._record(review, kind, "denied", sandbox=executor.name, **base)
+            return EXIT_DENIED
+        if high:
+            answer = self.prompter.text(
+                f"This script is HIGH risk. Type '{FORCE_PHRASE}' to execute it anyway: "
+            )
+            if answer.strip() != FORCE_PHRASE:
+                self.console.print("Second confirmation not given; nothing was run.")
+                self._record(review, kind, "denied", sandbox=executor.name, **base)
+                return EXIT_DENIED
+
+        result = executor.run(script, workspace, Limits(timeout=options.timeout))
+        self.show_result(result)
+        self._record(
+            review,
+            kind,
+            "executed",
+            sandbox=result.sandbox,
+            exit_code=result.exit_code,
+            duration_s=result.duration_s,
+            timed_out=result.timed_out,
+            **base,
+        )
+        return result.exit_code
+
+    def _prepare_executor(self, mode: str) -> Executor:
+        executor = self.executor_factory(mode)
+        if isinstance(executor, DockerExecutor):
+            try:
+                executor.ensure_image()
+            except SandboxError as exc:
+                if mode == "docker":
+                    raise
+                self.console.print(
+                    f"[yellow]{escape(str(exc))}; falling back to the subprocess sandbox[/]"
+                )
+                return SubprocessExecutor()
+        if isinstance(executor, SubprocessExecutor):
+            self.console.print(
+                "[yellow]Docker unavailable or not selected: using the restricted subprocess "
+                "fallback (timeout + rlimits, NOT an isolation boundary).[/]"
+            )
+        return executor
+
+    def explain(self, script: str, source: str) -> int:
+        workspace = Path.cwd()
+        review = self.review(script, workspace)
+        self.show_script(script, escape(source))
+        self.show_checks(review)
+        self.show_risk(review.report)
+        self.show_plan(review.plan)
+        try:
+            explanation = self.provider.explain(script)
+        except ProviderError as exc:
+            self.console.print(f"[bold red]Provider error:[/] {escape(str(exc))}")
+            explanation = ""
+        if explanation:
+            self.console.print(
+                Panel(Text(explanation), title=f"Explanation ({self.provider.name})")
+            )
+        self._record(review, "explain", "explained", source=source)
+        return EXIT_OK
